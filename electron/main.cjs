@@ -26,7 +26,7 @@ function createWindow() {
       path.join(app.getAppPath(), 'dist', 'index.html')
     )
   } else {
-    mainWindow.loadURL('http://localhost:5173')
+    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
   }
 }
 
