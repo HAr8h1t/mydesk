@@ -175,7 +175,50 @@ function normalizeNote(note) {
     ...note,
     createdAt: note.createdAt || updatedAt,
     updatedAt,
+    category: note.category || '',
+    tags: Array.isArray(note.tags) ? note.tags : [],
+    pinned: Boolean(note.pinned),
+    archived: Boolean(note.archived),
+    dailyDate: note.dailyDate || '',
+    links: Array.isArray(note.links) ? note.links : [],
+    attachments: Array.isArray(note.attachments) ? note.attachments : [],
   }
+}
+
+function renderMarkdownInline(text, keyPrefix) {
+  return text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|~~[^~]+~~)/g).map((part, index) => {
+    const key = `${keyPrefix}-${index}`
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={key}>{part.slice(2, -2)}</strong>
+    if (part.startsWith('*') && part.endsWith('*')) return <em key={key}>{part.slice(1, -1)}</em>
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={key}>{part.slice(1, -1)}</code>
+    if (part.startsWith('~~') && part.endsWith('~~')) return <del key={key}>{part.slice(2, -2)}</del>
+    return part
+  })
+}
+
+function renderMarkdown(markdown) {
+  return markdown.split(/\n{2,}/).filter(Boolean).map((block, index) => {
+    const key = `block-${index}`
+    const heading = block.match(/^(#{1,3})\s+(.+)$/)
+    if (heading) {
+      const Heading = `h${heading[1].length}`
+      return <Heading key={key}>{renderMarkdownInline(heading[2], key)}</Heading>
+    }
+    const lines = block.split('\n')
+    if (lines.every(line => /^\s*[-*]\s+/.test(line))) {
+      return <ul key={key}>{lines.map((line, lineIndex) => (
+        <li key={`${key}-${lineIndex}`}>{renderMarkdownInline(line.replace(/^\s*[-*]\s+/, ''), `${key}-${lineIndex}`)}</li>
+      ))}</ul>
+    }
+    if (lines.every(line => /^\s*\d+\.\s+/.test(line))) {
+      return <ol key={key}>{lines.map((line, lineIndex) => (
+        <li key={`${key}-${lineIndex}`}>{renderMarkdownInline(line.replace(/^\s*\d+\.\s+/, ''), `${key}-${lineIndex}`)}</li>
+      ))}</ol>
+    }
+    return <p key={key}>{lines.map((line, lineIndex) => (
+      <span key={`${key}-${lineIndex}`}>{lineIndex > 0 && <br />}{renderMarkdownInline(line, `${key}-${lineIndex}`)}</span>
+    ))}</p>
+  })
 }
 
 function localDateKey(value) {
@@ -280,7 +323,7 @@ function playReminderSound(sound) {
   }
 }
 
-function timelineActivities(date, tasks, events, notes, history, reminders) {
+function timelineActivities(date, tasks, events, notes, history, reminders, alarmHistory) {
   const activities = []
   const completedByDate = task => task.completedAt && localDateKey(task.completedAt) <= date
 
@@ -352,15 +395,15 @@ function timelineActivities(date, tasks, events, notes, history, reminders) {
     })
   })
 
-  notes.filter(note => localDateKey(note.createdAt) === date).forEach(note => {
+  notes.filter(note => localDateKey(note.createdAt) === date || note.dailyDate === date).forEach(note => {
     activities.push({
       id: `${note.id}-created-${date}`,
       kind: 'note',
       title: note.title || 'Untitled note',
-      time: formatClock(note.createdAt),
-      sortTime: localTimeKey(note.createdAt),
-      status: 'created',
-      detail: note.body,
+      time: localDateKey(note.createdAt) === date ? formatClock(note.createdAt) : '',
+      sortTime: localDateKey(note.createdAt) === date ? localTimeKey(note.createdAt) : '12:00',
+      status: localDateKey(note.createdAt) === date ? 'created' : 'daily note',
+      detail: [note.category, note.body].filter(Boolean).join(' · '),
     })
   })
 
@@ -413,6 +456,18 @@ function timelineActivities(date, tasks, events, notes, history, reminders) {
         reminder.lastDeliveryKind === 'escalation' ? 'Escalated' : '',
       ].filter(Boolean).join(' · '),
       taskId: reminder.sourceType === 'task' ? reminder.sourceId : '',
+    })
+  })
+
+  alarmHistory.filter(entry => localDateKey(entry.occurredAt) === date).forEach(entry => {
+    activities.push({
+      id: `alarm-${entry.id}`,
+      kind: 'alarm',
+      title: entry.label,
+      time: formatClock(entry.occurredAt),
+      sortTime: localTimeKey(entry.occurredAt),
+      status: entry.action === 'triggered' ? 'triggered' : 'changed',
+      detail: `Alarm ${entry.action}`,
     })
   })
 
@@ -505,9 +560,19 @@ function App() {
   const [taskStoreError, setTaskStoreError] = useState('')
   const [reminderStoreReady, setReminderStoreReady] = useState(() => !window.mydesk?.reminders)
   const [reminderStoreError, setReminderStoreError] = useState('')
+  const [notesReady, setNotesReady] = useState(() => !window.mydesk?.notes)
+  const [notesError, setNotesError] = useState('')
+  const [alarms, setAlarms] = useState([])
+  const [alarmProfiles, setAlarmProfiles] = useState(['General'])
+  const [alarmHistory, setAlarmHistory] = useState([])
+  const [alarmsReady, setAlarmsReady] = useState(() => !window.mydesk?.alarms)
+  const [alarmError, setAlarmError] = useState('')
+  const [activeAlarm, setActiveAlarm] = useState(null)
   const [taskActionError, setTaskActionError] = useState('')
   const [noteSearch, setNoteSearch] = useState('')
   const [selectedNoteId, setSelectedNoteId] = useState(storedContent.notes[0]?.id ?? null)
+  const [showArchivedNotes, setShowArchivedNotes] = useState(false)
+  const [searchResults, setSearchResults] = useState([])
 
   useEffect(() => {
     const taskDatabase = window.mydesk?.tasks
@@ -553,6 +618,51 @@ function App() {
   }, [storedContent.reminders, storedContent.tasks])
 
   useEffect(() => {
+    const database = window.mydesk?.notes
+    if (!database) return undefined
+    let active = true
+    database.load().then(async saved => {
+      if (!active) return
+      if (saved.notes.length) {
+        setNotes(saved.notes.map(normalizeNote))
+        setSelectedNoteId(current => saved.notes.some(note => note.id === current) ? current : saved.notes[0].id)
+      } else if (!saved.hasImportedLegacyNotes) {
+        const migratedNotes = storedContent.notes.map(normalizeNote)
+        await database.saveAll(migratedNotes)
+        if (active) {
+          setNotes(migratedNotes)
+          setSelectedNoteId(current => migratedNotes.some(note => note.id === current) ? current : migratedNotes[0]?.id ?? null)
+        }
+      } else {
+        setNotes([])
+        setSelectedNoteId(null)
+      }
+      if (active) setNotesReady(true)
+    }).catch(error => {
+      if (active) setNotesError(`Notes could not be loaded from the local database: ${error.message}`)
+    })
+    return () => { active = false }
+  }, [storedContent.notes])
+
+  useEffect(() => {
+    const database = window.mydesk?.alarms
+    if (!database) return undefined
+    let active = true
+    database.load().then(saved => {
+      if (!active) return
+      setAlarms(saved.alarms)
+      setAlarmProfiles(saved.profiles)
+      setAlarmHistory(saved.history)
+      const ringingAlarm = saved.alarms.find(alarm => alarm.ringingAt)
+      if (ringingAlarm) setActiveAlarm(ringingAlarm)
+      setAlarmsReady(true)
+    }).catch(error => {
+      if (active) setAlarmError(`Alarms could not be loaded from the local database: ${error.message}`)
+    })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
     const taskDatabase = window.mydesk?.tasks
     if (taskDatabase) {
       if (!taskStoreReady) return
@@ -565,8 +675,81 @@ function App() {
   }, [tasks, taskStoreReady])
 
   useEffect(() => {
-    localStorage.setItem('mydesk-notes', JSON.stringify(notes))
-  }, [notes])
+    if (!notesReady) return
+    const database = window.mydesk?.notes
+    if (!database) {
+      localStorage.setItem('mydesk-notes', JSON.stringify(notes))
+      return
+    }
+    const timeout = window.setTimeout(() => {
+      database.saveAll(notes).then(() => setNotesError('')).catch(error => {
+        setNotesError(`Notes could not be saved to the local database: ${error.message}`)
+      })
+    }, 350)
+    return () => window.clearTimeout(timeout)
+  }, [notes, notesReady])
+
+  useEffect(() => {
+    const database = window.mydesk?.notes
+    if (!database || !notesReady) return undefined
+    let active = true
+    database.search(noteSearch, showArchivedNotes).then(results => {
+      if (active) setSearchResults(results)
+    }).catch(error => {
+      if (active) setNotesError(`Notes could not be searched: ${error.message}`)
+    })
+    return () => { active = false }
+  }, [noteSearch, notes, notesReady, showArchivedNotes])
+
+  useEffect(() => {
+    const database = window.mydesk?.alarms
+    if (!database || !alarmsReady) return
+    database.save(alarms, alarmProfiles).then(saved => {
+      setAlarmProfiles(current => (
+        current.length === saved.profiles.length
+        && current.every((profile, index) => profile === saved.profiles[index])
+          ? current
+          : saved.profiles
+      ))
+      setAlarmHistory(saved.history)
+      setAlarmError('')
+    }).catch(error => {
+      setAlarmError(`Alarms could not be saved to the local database: ${error.message}`)
+    })
+  }, [alarms, alarmProfiles, alarmsReady])
+
+  useEffect(() => {
+    const database = window.mydesk?.alarms
+    if (!database?.onTriggered) return undefined
+    const unsubscribeTriggered = database.onTriggered(alarm => {
+      setActiveAlarm(alarm)
+      setAlarms(current => current.map(item => item.id === alarm.id ? alarm : item))
+      playReminderSound(alarm.sound || 'chime')
+    })
+    const unsubscribeError = database.onError?.(message => setAlarmError(message))
+    return () => {
+      unsubscribeTriggered()
+      unsubscribeError?.()
+    }
+  }, [])
+
+  useEffect(() => {
+    const database = window.mydesk?.notes
+    if (!database?.onQuickCapture) return undefined
+    return database.onQuickCapture(() => {
+      const now = new Date().toISOString()
+      const note = normalizeNote({
+        id: createId(),
+        title: 'Untitled note',
+        body: '',
+        createdAt: now,
+        updatedAt: now,
+      })
+      setNotes(current => [note, ...current])
+      setSelectedNoteId(note.id)
+      setActiveView('Notes')
+    })
+  }, [])
 
   useEffect(() => {
     localStorage.setItem('mydesk-events', JSON.stringify(events))
@@ -609,9 +792,14 @@ function App() {
     return `${task.title} ${task.category} ${task.project} ${task.goal} ${task.tags.join(' ')}`
       .toLowerCase().includes(query)
   }), [taskFilter, taskSearch, tasks])
-  const filteredNotes = useMemo(() => notes.filter(note => (
-    `${note.title} ${note.body}`.toLowerCase().includes(noteSearch.toLowerCase())
-  )), [noteSearch, notes])
+  const filteredNotes = useMemo(() => {
+    if (window.mydesk?.notes) return searchResults
+    const query = noteSearch.trim().toLowerCase()
+    return notes.filter(note => (
+      (!note.archived || showArchivedNotes)
+      && (!query || `${note.title} ${note.body} ${note.category} ${(note.tags || []).join(' ')}`.toLowerCase().includes(query))
+    ))
+  }, [noteSearch, notes, searchResults, showArchivedNotes])
 
   function hasDependencyCycle(taskId, dependencies) {
     const tasksById = new Map(tasks.map(task => [task.id, task]))
@@ -772,13 +960,13 @@ function App() {
 
   function createNote() {
     const now = new Date().toISOString()
-    const note = {
+    const note = normalizeNote({
       id: createId(),
       title: 'Untitled note',
       body: '',
       createdAt: now,
       updatedAt: now,
-    }
+    })
     setNotes(current => [note, ...current])
     setSelectedNoteId(note.id)
     setActiveView('Notes')
@@ -797,6 +985,93 @@ function App() {
     if (selectedNoteId === id) {
       setSelectedNoteId(notes.find(note => note.id !== id)?.id ?? null)
     }
+    window.mydesk?.notes?.delete(id).catch(error => {
+      setNotesError(`The note could not be deleted: ${error.message}`)
+    })
+  }
+
+  async function addNoteAttachments(noteId) {
+    try {
+      const attachments = await window.mydesk?.notes?.addAttachments(noteId)
+      if (attachments) {
+        setNotes(current => current.map(note => note.id === noteId ? { ...note, attachments } : note))
+      }
+    } catch (error) {
+      setNotesError(`Attachments could not be added: ${error.message}`)
+    }
+  }
+
+  async function removeNoteAttachment(noteId, attachmentId) {
+    try {
+      const attachments = await window.mydesk?.notes?.removeAttachment(noteId, attachmentId)
+      if (attachments) {
+        setNotes(current => current.map(note => note.id === noteId ? { ...note, attachments } : note))
+      }
+    } catch (error) {
+      setNotesError(`The attachment could not be removed: ${error.message}`)
+    }
+  }
+
+  async function openNoteAttachment(noteId, attachmentId) {
+    try {
+      await window.mydesk?.notes?.openAttachment(noteId, attachmentId)
+    } catch (error) {
+      setNotesError(`The attachment could not be opened: ${error.message}`)
+    }
+  }
+
+  async function loadNoteHistory(noteId) {
+    try {
+      return await window.mydesk?.notes?.history(noteId) || []
+    } catch (error) {
+      setNotesError(`Note history could not be loaded: ${error.message}`)
+      return []
+    }
+  }
+
+  function updateAlarm(draft) {
+    const existing = alarms.find(alarm => alarm.id === draft.id)
+    const alarm = {
+      ...draft,
+      id: draft.id || createId(),
+      createdAt: existing?.createdAt || new Date().toISOString(),
+    }
+    setAlarms(current => existing
+      ? current.map(item => item.id === alarm.id ? alarm : item)
+      : [alarm, ...current])
+    setAlarmProfiles(current => [...new Set([...current, alarm.profile || 'General'])])
+  }
+
+  async function changeAlarm(id, action, value) {
+    const database = window.mydesk?.alarms
+    try {
+      const updated = database
+        ? await database[action](id, value)
+        : (() => {
+          const alarm = alarms.find(item => item.id === id)
+          if (!alarm) return null
+          if (action === 'setEnabled') return { ...alarm, enabled: Boolean(value) }
+          if (action === 'snooze') return { ...alarm, ringingAt: '', snoozedUntil: new Date(Date.now() + value * 60_000).toISOString() }
+          return { ...alarm, enabled: alarm.repeat === 'once' ? false : alarm.enabled, ringingAt: '', snoozedUntil: '' }
+        })()
+      if (updated) setAlarms(current => current.map(item => item.id === id ? updated : item))
+      if (action === 'dismiss' || action === 'snooze') setActiveAlarm(null)
+      if (database) {
+        const latest = await database.load()
+        setAlarmHistory(latest.history)
+      }
+    } catch (error) {
+      setAlarmError(`The alarm could not be ${action === 'delete' ? 'deleted' : action === 'setEnabled' ? 'updated' : action === 'snooze' ? 'snoozed' : 'dismissed'}: ${error.message}`)
+    }
+  }
+
+  function deleteAlarm(id) {
+    window.mydesk?.alarms?.delete(id).then(() => {
+      setAlarms(current => current.filter(alarm => alarm.id !== id))
+    }).catch(error => {
+      setAlarmError(`The alarm could not be deleted: ${error.message}`)
+    })
+    if (!window.mydesk?.alarms) setAlarms(current => current.filter(alarm => alarm.id !== id))
   }
 
   function saveReminder(draft) {
@@ -1006,6 +1281,8 @@ function App() {
         <div className="page-content">
           {taskStoreError && <div className="task-storage-error" role="alert">{taskStoreError}</div>}
           {reminderStoreError && <div className="task-storage-error" role="alert">{reminderStoreError}</div>}
+          {notesError && <div className="task-storage-error" role="alert">{notesError}</div>}
+          {alarmError && <div className="task-storage-error" role="alert">{alarmError}</div>}
           {taskActionError && <div className="task-action-error" role="alert"><span>{taskActionError}</span><button type="button" onClick={() => setTaskActionError('')}>Dismiss</button></div>}
           {activeView === 'Dashboard' && (
             <Dashboard
@@ -1043,7 +1320,7 @@ function App() {
           )}
 
           {activeView === 'Timeline' && (
-            <TimelinePage tasks={tasks} events={events} notes={notes} reminders={reminders} />
+            <TimelinePage tasks={tasks} events={events} notes={notes} reminders={reminders} alarmHistory={alarmHistory} />
           )}
 
           {activeView === 'Reminders' && (
@@ -1093,19 +1370,45 @@ function App() {
               notes={filteredNotes}
               selectedNote={selectedNote}
               noteSearch={noteSearch}
+              showArchivedNotes={showArchivedNotes}
               setNoteSearch={setNoteSearch}
+              setShowArchivedNotes={setShowArchivedNotes}
               setSelectedNoteId={setSelectedNoteId}
               onCreateNote={createNote}
               onUpdateNote={updateNote}
               onDeleteNote={deleteNote}
+              tasks={tasks}
+              events={events}
+              onAddAttachments={addNoteAttachments}
+              onRemoveAttachment={removeNoteAttachment}
+              onOpenAttachment={openNoteAttachment}
+              onLoadHistory={loadNoteHistory}
             />
           )}
 
-          {!['Dashboard', 'Tasks', 'Timeline', 'Calendar', 'Reminders', 'Notes'].includes(activeView) && (
+          {activeView === 'Alarms' && (
+            <AlarmsPage
+              alarms={alarms}
+              profiles={alarmProfiles}
+              history={alarmHistory}
+              onSave={updateAlarm}
+              onToggle={(id, enabled) => changeAlarm(id, 'setEnabled', enabled)}
+              onDelete={deleteAlarm}
+            />
+          )}
+
+          {!['Dashboard', 'Tasks', 'Timeline', 'Calendar', 'Reminders', 'Notes', 'Alarms'].includes(activeView) && (
             <ComingSoonPage title={activeView} />
           )}
         </div>
       </main>
+      {activeAlarm && (
+        <AlarmRingingOverlay
+          alarm={activeAlarm}
+          onSnooze={minutes => changeAlarm(activeAlarm.id, 'snooze', minutes)}
+          onDismiss={() => changeAlarm(activeAlarm.id, 'dismiss')}
+        />
+      )}
     </div>
   )
 }
@@ -1548,6 +1851,7 @@ function getTimelineSummary(activities) {
     completed: completedTaskIds.size,
     events: activities.filter(activity => activity.kind === 'event').length,
     reminders: activities.filter(activity => activity.kind === 'reminder').length,
+    alarms: activities.filter(activity => activity.kind === 'alarm').length,
     notes: activities.filter(activity => activity.kind === 'note').length,
     changes: activities.filter(activity => activity.kind === 'activity' && activity.status === 'changed').length,
   }
@@ -1563,6 +1867,7 @@ function TimelineSummary({ activities, label }) {
         <span><b>{summary.tasks}</b> tasks</span>
         <span><b>{summary.events}</b> events</span>
         <span><b>{summary.reminders}</b> {summary.reminders === 1 ? 'reminder' : 'reminders'}</span>
+        <span><b>{summary.alarms}</b> {summary.alarms === 1 ? 'alarm' : 'alarms'}</span>
         <span><b>{summary.notes}</b> notes</span>
         <span><b>{summary.changes}</b> schedule changes</span>
       </div>
@@ -1570,7 +1875,7 @@ function TimelineSummary({ activities, label }) {
   )
 }
 
-function TimelinePage({ tasks, events, notes, reminders }) {
+function TimelinePage({ tasks, events, notes, reminders, alarmHistory }) {
   const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date()))
   const [compareDate, setCompareDate] = useState('')
   const [search, setSearch] = useState('')
@@ -1623,6 +1928,7 @@ function TimelinePage({ tasks, events, notes, reminders }) {
     notes,
     historyByDate[selectedDate] || [],
     reminders,
+    alarmHistory,
   )
   const formattedDate = new Intl.DateTimeFormat('en', {
     weekday: 'long',
@@ -1639,7 +1945,7 @@ function TimelinePage({ tasks, events, notes, reminders }) {
       .toLowerCase().includes(query)
   })
   const compareActivities = compareDate
-    ? timelineActivities(compareDate, tasks, events, notes, historyByDate[compareDate] || [], reminders)
+    ? timelineActivities(compareDate, tasks, events, notes, historyByDate[compareDate] || [], reminders, alarmHistory)
     : []
   const selectedSummary = getTimelineSummary(currentActivities)
   const compareSummary = getTimelineSummary(compareActivities)
@@ -1675,7 +1981,7 @@ function TimelinePage({ tasks, events, notes, reminders }) {
       <section className="timeline-controls surface-card">
         <label><Icon name="search" size={17} /><input aria-label="Search timeline" placeholder="Search this day’s activities..." value={search} onChange={event => setSearch(event.target.value)} /></label>
         <label className="timeline-select-label"><span>Type</span><select aria-label="Filter timeline by type" value={typeFilter} onChange={event => setTypeFilter(event.target.value)}>
-          <option value="all">All activity</option><option value="task">Tasks</option><option value="event">Events</option><option value="reminder">Reminders</option><option value="note">Notes</option><option value="activity">Schedule changes</option>
+          <option value="all">All activity</option><option value="task">Tasks</option><option value="event">Events</option><option value="reminder">Reminders</option><option value="alarm">Alarms</option><option value="note">Notes</option><option value="activity">Schedule changes</option>
         </select></label>
         <label className="timeline-select-label"><span>Status</span><select aria-label="Filter timeline by status" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}>
           <option value="all">Any status</option><option value="scheduled">Scheduled</option><option value="triggered">Triggered</option><option value="pending">Pending</option><option value="completed">Completed</option><option value="postponed">Postponed</option><option value="changed">Changed</option><option value="created">Created</option>
@@ -1705,7 +2011,7 @@ function TimelinePage({ tasks, events, notes, reminders }) {
         ) : (
           <div className="timeline-empty"><span className="coming-soon-icon"><Icon name="clock" size={21} /></span><strong>No matching activity</strong><span>Try another date or clear the current filters.</span></div>
         )}
-        <p className="timeline-sources">Timeline combines tasks, reminders, events, notes, and task schedule history. Alarms, focus sessions, and journal entries will appear when those modules are available.</p>
+        <p className="timeline-sources">Timeline combines tasks, reminders, alarms, events, notes, and task schedule history. Focus sessions and journal entries will appear when those modules are available.</p>
       </section>
     </>
   )
@@ -2009,12 +2315,62 @@ function CalendarItem({ item, compact, conflicted, onOpenEvent, onToggleTask, on
   )
 }
 
-function NotesPage({ notes, selectedNote, noteSearch, setNoteSearch, setSelectedNoteId, onCreateNote, onUpdateNote, onDeleteNote }) {
+function NotesPage({
+  notes,
+  selectedNote,
+  noteSearch,
+  showArchivedNotes,
+  setNoteSearch,
+  setShowArchivedNotes,
+  setSelectedNoteId,
+  onCreateNote,
+  onUpdateNote,
+  onDeleteNote,
+  tasks,
+  events,
+  onAddAttachments,
+  onRemoveAttachment,
+  onOpenAttachment,
+  onLoadHistory,
+}) {
+  const [preview, setPreview] = useState(false)
+  const [history, setHistory] = useState([])
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [linkTarget, setLinkTarget] = useState('')
+
+  async function toggleHistory() {
+    if (!historyOpen && selectedNote) setHistory(await onLoadHistory(selectedNote.id))
+    setHistoryOpen(current => !current)
+  }
+
+  function addLink() {
+    if (!selectedNote || !linkTarget) return
+    const separator = linkTarget.indexOf(':')
+    const type = linkTarget.slice(0, separator)
+    const targetId = linkTarget.slice(separator + 1)
+    const target = type === 'task'
+      ? tasks.find(item => item.id === targetId)
+      : type === 'event'
+        ? events.find(item => item.id === targetId)
+        : { title: targetId }
+    if (!target || selectedNote.links.some(link => link.type === type && link.targetId === targetId)) return
+    onUpdateNote('links', [...selectedNote.links, {
+      id: createId(),
+      type,
+      targetId,
+      label: target.title,
+    }])
+    setLinkTarget('')
+  }
+
   return (
     <>
       <section className="page-title-row notes-title-row">
         <div><p className="eyebrow">YOUR THOUGHTS, KEPT CLOSE</p><h1>A place for notes<span>.</span></h1><p className="welcome-subtitle">Catch an idea before it wanders off.</p></div>
-        <button type="button" className="primary-button create-note-button" onClick={onCreateNote}><Icon name="plus" size={17} /> New note</button>
+        <div className="notes-page-actions">
+          <button type="button" className={`calendar-today ${showArchivedNotes ? 'filter-chip-active' : ''}`} onClick={() => setShowArchivedNotes(current => !current)}>{showArchivedNotes ? 'Hide archived' : 'Show archived'}</button>
+          <button type="button" className="primary-button create-note-button" onClick={onCreateNote}><Icon name="plus" size={17} /> New note</button>
+        </div>
       </section>
       <section className="notes-workspace">
         <aside className="notes-list surface-card">
@@ -2023,7 +2379,7 @@ function NotesPage({ notes, selectedNote, noteSearch, setNoteSearch, setSelected
           <div className="notes-list-items">
             {notes.map(note => (
               <button type="button" key={note.id} className={`note-list-item ${selectedNote?.id === note.id ? 'note-list-selected' : ''}`} onClick={() => setSelectedNoteId(note.id)}>
-                <strong>{note.title || 'Untitled note'}</strong>
+                <strong>{note.pinned ? '★ ' : ''}{note.title || 'Untitled note'}{note.archived ? ' · Archived' : ''}</strong>
                 <span>{note.body || 'No additional text'}</span>
                 <small>{formatDate(note.updatedAt)}</small>
               </button>
@@ -2034,11 +2390,69 @@ function NotesPage({ notes, selectedNote, noteSearch, setNoteSearch, setSelected
         <article className="note-editor surface-card">
           {selectedNote ? (
             <>
-              <div className="editor-toolbar"><span><span className="status-dot" /> Saved locally</span><button type="button" aria-label="Delete note" className="icon-button delete-note-button" onClick={() => onDeleteNote(selectedNote.id)}><Icon name="trash" size={17} /></button></div>
+              <div className="editor-toolbar">
+                <span><span className="status-dot" /> Autosaved on this device</span>
+                <div className="note-toolbar-actions">
+                  <button type="button" className="calendar-today" onClick={() => onUpdateNote('pinned', !selectedNote.pinned)}>{selectedNote.pinned ? 'Unpin' : 'Pin'}</button>
+                  <button type="button" className="calendar-today" onClick={() => onUpdateNote('archived', !selectedNote.archived)}>{selectedNote.archived ? 'Restore' : 'Archive'}</button>
+                  <button type="button" aria-label="Delete note" className="icon-button delete-note-button" onClick={() => onDeleteNote(selectedNote.id)}><Icon name="trash" size={17} /></button>
+                </div>
+              </div>
               <input className="note-title-input" aria-label="Note title" value={selectedNote.title} onChange={event => onUpdateNote('title', event.target.value)} placeholder="Untitled note" />
               <div className="editor-date">Last edited {formatDate(selectedNote.updatedAt)}</div>
-              <textarea className="note-body-input" aria-label="Note content" value={selectedNote.body} onChange={event => onUpdateNote('body', event.target.value)} placeholder="Start writing here..." />
-              <div className="editor-footer">Your notes are saved automatically on this device.</div>
+              <div className="note-metadata-row">
+                <label>Category<input aria-label="Note category" maxLength={80} value={selectedNote.category} onChange={event => onUpdateNote('category', event.target.value)} placeholder="Uncategorized" /></label>
+                <label>Daily note<input aria-label="Daily note date" type="date" value={selectedNote.dailyDate} onChange={event => onUpdateNote('dailyDate', event.target.value)} /></label>
+                <label>Tags<input aria-label="Note tags" value={selectedNote.tags.join(', ')} onChange={event => onUpdateNote('tags', [...new Set(event.target.value.split(',').map(tag => tag.trim()).filter(Boolean))])} placeholder="Separate with commas" /></label>
+              </div>
+              <div className="markdown-toolbar">
+                <span>Markdown supported</span>
+                <button type="button" className={`calendar-today ${!preview ? 'filter-chip-active' : ''}`} onClick={() => setPreview(false)}>Write</button>
+                <button type="button" className={`calendar-today ${preview ? 'filter-chip-active' : ''}`} onClick={() => setPreview(true)}>Preview</button>
+              </div>
+              {preview
+                ? <div className="note-markdown-preview">{renderMarkdown(selectedNote.body)}</div>
+                : <textarea className="note-body-input" aria-label="Note content in Markdown" value={selectedNote.body} onChange={event => onUpdateNote('body', event.target.value)} placeholder="Start writing here..." />}
+              <div className="note-related-section">
+                <div className="note-section-heading"><strong>Linked items</strong><span>Tasks, events, or dates</span></div>
+                <div className="note-link-controls">
+                  <select aria-label="Link task or event" value={linkTarget} onChange={event => setLinkTarget(event.target.value)}>
+                    <option value="">Choose a task or event</option>
+                    <optgroup label="Tasks">{tasks.map(task => <option key={task.id} value={`task:${task.id}`}>{task.title}</option>)}</optgroup>
+                    <optgroup label="Events">{events.map(event => <option key={event.id} value={`event:${event.id}`}>{event.title}</option>)}</optgroup>
+                    <optgroup label="Projects">{[...new Set(tasks.map(task => task.project).filter(Boolean))].map(project => <option key={project} value={`project:${project}`}>{project}</option>)}</optgroup>
+                  </select>
+                  <button type="button" className="calendar-today" onClick={addLink} disabled={!linkTarget}>Link</button>
+                </div>
+                <div className="note-link-list">
+                  {selectedNote.dailyDate && <span className="note-link-chip">Date · {formatDate(parseDateKey(selectedNote.dailyDate))}</span>}
+                  {selectedNote.links.map(link => (
+                    <span className="note-link-chip" key={link.id}>{link.type === 'task' ? 'Task' : link.type === 'event' ? 'Event' : 'Project'} · {link.label}<button type="button" aria-label={`Remove link to ${link.label}`} onClick={() => onUpdateNote('links', selectedNote.links.filter(item => item.id !== link.id))}>×</button></span>
+                  ))}
+                  {!selectedNote.links.length && !selectedNote.dailyDate && <span className="note-empty-hint">No linked items yet.</span>}
+                </div>
+              </div>
+              <div className="note-related-section">
+                <div className="note-section-heading"><strong>Attachments</strong><button type="button" className="calendar-today" onClick={() => onAddAttachments(selectedNote.id)}>Add files</button></div>
+                <div className="note-attachment-list">
+                  {selectedNote.attachments.map(file => (
+                    <div className="note-attachment" key={file.id}>
+                      <button type="button" onClick={() => onOpenAttachment(selectedNote.id, file.id)}>{file.name}</button>
+                      <span>{Math.max(1, Math.ceil(file.size / 1024))} KB</span>
+                      <button type="button" aria-label={`Remove ${file.name}`} onClick={() => onRemoveAttachment(selectedNote.id, file.id)}>×</button>
+                    </div>
+                  ))}
+                  {!selectedNote.attachments.length && <span className="note-empty-hint">No attached files.</span>}
+                </div>
+              </div>
+              <div className="note-related-section note-history-section">
+                <button type="button" className="note-history-toggle" onClick={toggleHistory}>{historyOpen ? 'Hide note history' : `Show note history${selectedNote.historyCount ? ` (${selectedNote.historyCount})` : ''}`}</button>
+                {historyOpen && <div className="note-history-list">
+                  {history.map(entry => <article key={entry.id}><strong>{entry.action}</strong><time>{formatDate(entry.createdAt)}</time><p>{entry.title || 'Untitled note'} · {entry.body || 'Empty note'}</p></article>)}
+                  {!history.length && <span className="note-empty-hint">No earlier versions yet.</span>}
+                </div>}
+              </div>
+              <div className="editor-footer">Changes are saved automatically. Use the desktop shortcut Ctrl+Shift+N for quick capture.</div>
             </>
           ) : (
             <div className="empty-state note-empty-state"><span className="empty-state-icon empty-note"><Icon name="note" size={22} /></span><h3>{noteSearch ? 'No notes found' : 'Your page is blank'}</h3><p>{noteSearch ? 'Try another search, or clear the search field.' : 'Create a note to collect your thoughts and ideas.'}</p>{!noteSearch && <button type="button" className="primary-button" onClick={onCreateNote}><Icon name="plus" size={16} /> Create a note</button>}</div>
@@ -2046,6 +2460,101 @@ function NotesPage({ notes, selectedNote, noteSearch, setNoteSearch, setSelected
         </article>
       </section>
     </>
+  )
+}
+
+function AlarmsPage({ alarms, profiles, history, onSave, onToggle, onDelete }) {
+  const [today] = useState(() => dateKey(new Date()))
+  const [draft, setDraft] = useState(null)
+  const [profileDraft, setProfileDraft] = useState('')
+  const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+  function createAlarm() {
+    setDraft({
+      id: '',
+      label: '',
+      time: '07:00',
+      onceDate: today,
+      repeat: 'once',
+      days: [1, 2, 3, 4, 5],
+      profile: profiles[0] || 'General',
+      sound: 'chime',
+      enabled: true,
+    })
+  }
+
+  function saveDraft(event) {
+    event.preventDefault()
+    onSave({ ...draft, label: draft.label.trim() || 'Alarm' })
+    setDraft(null)
+  }
+
+  function setField(field, value) {
+    setDraft(current => ({ ...current, [field]: value }))
+  }
+
+  const sortedAlarms = [...alarms].sort((a, b) => (a.nextAt || '').localeCompare(b.nextAt || ''))
+
+  return (
+    <>
+      <section className="page-title-row alarm-title-row">
+        <div><p className="eyebrow">A GENTLER WAY TO WAKE</p><h1>Your alarms<span>.</span></h1><p className="welcome-subtitle">Set the moments that help shape your day.</p></div>
+        <button type="button" className="primary-button" onClick={createAlarm}><Icon name="plus" size={17} /> New alarm</button>
+      </section>
+      <p className="alarm-platform-notice">Alarms use desktop notifications and cannot ring while this computer is asleep or powered off.</p>
+      <section className="alarm-layout">
+        <div className="alarm-list">
+          {!sortedAlarms.length && <div className="surface-card alarm-empty"><Icon name="clock" size={26} /><h2>No alarms yet</h2><p>Create one for a single date, daily, or selected weekdays.</p></div>}
+          {sortedAlarms.map(alarm => (
+            <article className={`surface-card alarm-card ${!alarm.enabled ? 'alarm-disabled' : ''}`} key={alarm.id}>
+              <div className="alarm-card-main">
+                <div className="alarm-clock-time">{alarm.time}</div>
+                <div className="alarm-card-copy"><strong>{alarm.label}</strong><span>{alarm.repeat === 'once' ? `Once · ${formatDate(parseDateKey(alarm.onceDate))}` : alarm.repeat === 'daily' ? 'Every day' : weekdays.filter((_, day) => alarm.days.includes(day)).join(', ')}</span><small>{alarm.profile} · {alarm.sound || 'system'} sound</small></div>
+              </div>
+              <label className="alarm-enable"><input type="checkbox" checked={alarm.enabled} onChange={event => onToggle(alarm.id, event.target.checked)} /><span>Enabled</span></label>
+              <div className="alarm-card-actions"><button type="button" className="calendar-today" onClick={() => setDraft({ ...alarm, days: [...alarm.days] })}>Edit</button><button type="button" className="icon-button" aria-label={`Delete ${alarm.label}`} onClick={() => onDelete(alarm.id)}><Icon name="trash" size={16} /></button></div>
+            </article>
+          ))}
+        </div>
+        <aside className="surface-card alarm-history">
+          <p className="eyebrow">RECENT ACTIVITY</p><h2>Alarm history</h2>
+          {history.length ? history.map(item => (
+            <div className="alarm-history-item" key={item.id}><strong>{item.label}</strong><span>{item.action}</span><time>{formatDate(item.occurredAt)} · {formatClock(item.occurredAt)}</time></div>
+          )) : <p className="note-empty-hint">Triggered, snoozed, and dismissed alarms will appear here.</p>}
+        </aside>
+      </section>
+      {draft && (
+        <div className="task-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setDraft(null) }}>
+          <form className="task-editor-modal alarm-editor-modal" onSubmit={saveDraft}>
+            <div className="task-editor-heading"><div><p className="eyebrow">ALARM DETAILS</p><h2>{draft.id ? 'Edit alarm' : 'Create an alarm'}</h2></div><button type="button" className="icon-button" aria-label="Close alarm form" onClick={() => setDraft(null)}>×</button></div>
+            <div className="task-form-grid">
+              <label className="task-form-field task-form-title"><span>Label</span><input autoFocus required maxLength={120} value={draft.label} onChange={event => setField('label', event.target.value)} placeholder="Morning alarm" /></label>
+              <label className="task-form-field"><span>Time</span><input required type="time" value={draft.time} onChange={event => setField('time', event.target.value)} /></label>
+              <label className="task-form-field"><span>Repeat</span><select value={draft.repeat} onChange={event => setField('repeat', event.target.value)}><option value="once">One time</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="custom">Custom days</option></select></label>
+              {draft.repeat === 'once' && <label className="task-form-field"><span>Date</span><input required type="date" value={draft.onceDate} onChange={event => setField('onceDate', event.target.value)} /></label>}
+              {['weekly', 'custom'].includes(draft.repeat) && <fieldset className="alarm-days-field"><legend>Repeat on</legend>{weekdays.map((day, index) => <label key={day}><input type="checkbox" checked={draft.days.includes(index)} onChange={event => setField('days', event.target.checked ? [...draft.days, index].sort() : draft.days.filter(item => item !== index))} />{day}</label>)}</fieldset>}
+              <label className="task-form-field"><span>Profile</span><select value={draft.profile} onChange={event => setField('profile', event.target.value)}>{[...new Set([...profiles, draft.profile])].map(profile => <option key={profile}>{profile}</option>)}</select></label>
+              <label className="task-form-field"><span>Sound</span><select value={draft.sound || 'system'} onChange={event => setField('sound', event.target.value)}><option value="system">System default</option><option value="gentle">Gentle tone</option><option value="chime">Chime</option><option value="silent">Silent notification</option></select></label>
+            </div>
+            <label className="alarm-new-profile">Add a profile<input maxLength={60} value={profileDraft} onChange={event => setProfileDraft(event.target.value)} placeholder="e.g. Workdays" /><button type="button" className="calendar-today" onClick={() => { const name = profileDraft.trim(); if (name) { setField('profile', name); setProfileDraft('') } }}>Use profile</button></label>
+            <label className="alarm-form-enabled"><input type="checkbox" checked={draft.enabled} onChange={event => setField('enabled', event.target.checked)} /> Enable this alarm</label>
+            <div className="task-editor-actions"><button type="button" className="calendar-today" onClick={() => setDraft(null)}>Cancel</button><button type="submit" className="primary-button">Save alarm</button></div>
+          </form>
+        </div>
+      )}
+    </>
+  )
+}
+
+function AlarmRingingOverlay({ alarm, onSnooze, onDismiss }) {
+  return (
+    <div className="alarm-ringing-backdrop" role="dialog" aria-modal="true" aria-labelledby="ringing-alarm-title">
+      <section className="alarm-ringing-card">
+        <span className="alarm-ringing-icon"><Icon name="clock" size={32} /></span>
+        <p className="eyebrow">ALARM</p><h2 id="ringing-alarm-title">{alarm.label}</h2><p>{formatClock(alarm.ringingAt)}</p>
+        <div className="alarm-ringing-actions"><button type="button" className="calendar-today" onClick={() => onSnooze(5)}>Snooze 5 min</button><button type="button" className="primary-button" onClick={onDismiss}>Dismiss</button></div>
+      </section>
+    </div>
   )
 }
 

@@ -1,5 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
+let quickCaptureCallback
+let quickCapturePending = false
+ipcRenderer.on('notes:quick-capture', () => {
+  if (quickCaptureCallback) quickCaptureCallback()
+  else quickCapturePending = true
+})
+
 contextBridge.exposeInMainWorld('mydesk', {
   platform: process.platform,
 
@@ -27,6 +34,44 @@ contextBridge.exposeInMainWorld('mydesk', {
       const listener = (_event, message) => callback(message)
       ipcRenderer.on('reminders:error', listener)
       return () => ipcRenderer.removeListener('reminders:error', listener)
+    },
+  },
+  alarms: {
+    load: () => ipcRenderer.invoke('alarms:list'),
+    save: (alarms, profiles) => ipcRenderer.invoke('alarms:save', alarms, profiles),
+    snooze: (id, minutes) => ipcRenderer.invoke('alarms:snooze', id, minutes),
+    dismiss: id => ipcRenderer.invoke('alarms:dismiss', id),
+    setEnabled: (id, enabled) => ipcRenderer.invoke('alarms:set-enabled', id, enabled),
+    delete: id => ipcRenderer.invoke('alarms:delete', id),
+    onTriggered: callback => {
+      const listener = (_event, payload) => callback(payload)
+      ipcRenderer.on('alarms:triggered', listener)
+      return () => ipcRenderer.removeListener('alarms:triggered', listener)
+    },
+    onError: callback => {
+      const listener = (_event, message) => callback(message)
+      ipcRenderer.on('alarms:error', listener)
+      return () => ipcRenderer.removeListener('alarms:error', listener)
+    },
+  },
+  notes: {
+    load: () => ipcRenderer.invoke('notes:list'),
+    saveAll: notes => ipcRenderer.invoke('notes:save-all', notes),
+    search: (query, includeArchived = false) => ipcRenderer.invoke('notes:search', query, includeArchived),
+    history: noteId => ipcRenderer.invoke('notes:history', noteId),
+    delete: noteId => ipcRenderer.invoke('notes:delete', noteId),
+    addAttachments: noteId => ipcRenderer.invoke('notes:add-attachments', noteId),
+    removeAttachment: (noteId, attachmentId) => ipcRenderer.invoke('notes:remove-attachment', noteId, attachmentId),
+    openAttachment: (noteId, attachmentId) => ipcRenderer.invoke('notes:open-attachment', noteId, attachmentId),
+    onQuickCapture: callback => {
+      quickCaptureCallback = callback
+      if (quickCapturePending) {
+        quickCapturePending = false
+        callback()
+      }
+      return () => {
+        if (quickCaptureCallback === callback) quickCaptureCallback = undefined
+      }
     },
   },
 })

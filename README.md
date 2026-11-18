@@ -372,3 +372,17 @@ Smart scheduling suggests a task that fits a free hour tomorrow. The calendar
 includes month, week, day, and agenda views, recurring events, event categories,
 and drag-and-drop rescheduling.
 >>>>>>> ee9f33d (Added Core Productivity System & Task managment system)
+
+## Current desktop scheduling and notes
+
+Alarms and notes are stored in the local SQLite database and accessed by React
+through the allowlisted Electron preload API. Alarms support one-time, daily,
+weekly, and custom weekday schedules, profiles, enable/disable, snooze, dismiss,
+and recent alarm history. A desktop shortcut (`Ctrl+Shift+N`) opens a quick note.
+Alarm notifications and timers only work while MyDesk is running; Windows cannot
+guarantee delivery while the PC is asleep or powered off.
+
+Notes support Markdown writing and preview, autosave, categories, tags, pinning,
+archiving, daily dates, links to tasks and events, FTS5 search, version history,
+and managed file attachments. Existing notes in local storage are imported into
+SQLite on first launch.
