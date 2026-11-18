@@ -9,6 +9,7 @@ const { ReminderScheduler } = require('./reminder-scheduler.cjs')
 const { AlarmStore } = require('./alarm-store.cjs')
 const { AlarmScheduler } = require('./alarm-scheduler.cjs')
 const { NoteStore } = require('./note-store.cjs')
+const { isTrustedIpcSender, isTrustedRendererUrl } = require('./ipc-security.cjs')
 
 let taskStore
 let reminderStore
@@ -16,6 +17,22 @@ let reminderScheduler
 let alarmStore
 let alarmScheduler
 let noteStore
+let mainWindow
+
+function registerIpcHandler(channel, handler) {
+  ipcMain.handle(channel, (event, ...args) => {
+    const trusted = isTrustedIpcSender(event, mainWindow, {
+      isPackaged: app.isPackaged,
+      devServerUrl: process.env.VITE_DEV_SERVER_URL,
+      appPath: app.getAppPath(),
+    })
+    if (!trusted) {
+      console.warn(`Rejected ${channel} IPC from an untrusted renderer frame.`)
+      throw new Error('IPC request rejected: untrusted renderer frame.')
+    }
+    return handler(event, ...args)
+  })
+}
 
 const attachmentTypes = {
   '.gif': 'image/gif',
@@ -47,17 +64,17 @@ async function removeStoredAttachments(paths) {
   }
 }
 
-ipcMain.handle('tasks:list', () => ({
+registerIpcHandler('tasks:list', () => ({
   tasks: taskStore.list(),
   hasImportedLegacyTasks: taskStore.hasImportedLegacyTasks(),
 }))
-ipcMain.handle('tasks:save', (_event, tasks) => {
+registerIpcHandler('tasks:save', (_event, tasks) => {
   taskStore.save(tasks)
   reminderStore.importLegacyTaskReminders(tasks)
   reminderScheduler.refresh()
   return reminderStore.list()
 })
-ipcMain.handle('tasks:history-for-date', (_event, date) => {
+registerIpcHandler('tasks:history-for-date', (_event, date) => {
   const parsedDate = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
     ? new Date(`${date}T00:00:00.000Z`)
     : null
@@ -66,70 +83,70 @@ ipcMain.handle('tasks:history-for-date', (_event, date) => {
   }
   return taskStore.historyForDate(date)
 })
-ipcMain.handle('reminders:list', () => {
+registerIpcHandler('reminders:list', () => {
   reminderStore.importLegacyTaskReminders(taskStore.list())
   reminderScheduler.refresh()
   return reminderStore.list()
 })
-ipcMain.handle('reminders:save', (_event, reminders) => {
+registerIpcHandler('reminders:save', (_event, reminders) => {
   reminderStore.save(reminders)
   reminderScheduler.refresh()
   return reminderStore.list()
 })
-ipcMain.handle('reminders:complete', (_event, id) => {
+registerIpcHandler('reminders:complete', (_event, id) => {
   const reminder = reminderStore.complete(id)
   reminderScheduler.refresh()
   return reminder
 })
-ipcMain.handle('reminders:snooze', (_event, id, minutes) => {
+registerIpcHandler('reminders:snooze', (_event, id, minutes) => {
   const reminder = reminderStore.snooze(id, minutes)
   reminderScheduler.refresh()
   return reminder
 })
-ipcMain.handle('reminders:delete', (_event, id) => {
+registerIpcHandler('reminders:delete', (_event, id) => {
   const deleted = reminderStore.delete(id)
   reminderScheduler.refresh()
   return deleted
 })
-ipcMain.handle('alarms:list', () => alarmStore.list())
-ipcMain.handle('alarms:save', (_event, alarms, profiles) => {
+registerIpcHandler('alarms:list', () => alarmStore.list())
+registerIpcHandler('alarms:save', (_event, alarms, profiles) => {
   const saved = alarmStore.save(alarms, profiles)
   alarmScheduler.refresh()
   return saved
 })
-ipcMain.handle('alarms:snooze', (_event, id, minutes) => {
+registerIpcHandler('alarms:snooze', (_event, id, minutes) => {
   const alarm = alarmStore.snooze(id, minutes)
   alarmScheduler.refresh()
   return alarm
 })
-ipcMain.handle('alarms:dismiss', (_event, id) => {
+registerIpcHandler('alarms:dismiss', (_event, id) => {
   const alarm = alarmStore.dismiss(id)
   alarmScheduler.refresh()
   return alarm
 })
-ipcMain.handle('alarms:set-enabled', (_event, id, enabled) => {
+registerIpcHandler('alarms:set-enabled', (_event, id, enabled) => {
   const alarm = alarmStore.setEnabled(id, enabled)
   alarmScheduler.refresh()
   return alarm
 })
-ipcMain.handle('alarms:delete', (_event, id) => {
+registerIpcHandler('alarms:delete', (_event, id) => {
   const deleted = alarmStore.delete(id)
   alarmScheduler.refresh()
   return deleted
 })
-ipcMain.handle('notes:list', () => ({
+registerIpcHandler('notes:list', () => ({
   notes: noteStore.list(),
   hasImportedLegacyNotes: noteStore.hasImportedLegacyNotes(),
 }))
-ipcMain.handle('notes:save-all', (_event, notes) => noteStore.saveAll(notes))
-ipcMain.handle('notes:save', (_event, note) => noteStore.save(note))
-ipcMain.handle('notes:search', (_event, query, includeArchived) => noteStore.search(query, Boolean(includeArchived)))
-ipcMain.handle('notes:history', (_event, noteId) => noteStore.history(noteId))
-ipcMain.handle('notes:delete', async (_event, noteId) => {
+registerIpcHandler('notes:save-all', (_event, notes) => noteStore.saveAll(notes))
+registerIpcHandler('notes:save', (_event, note) => noteStore.save(note))
+registerIpcHandler('notes:search', (_event, query, includeArchived) => noteStore.search(query, Boolean(includeArchived)))
+registerIpcHandler('notes:history', (_event, noteId) => noteStore.history(noteId))
+registerIpcHandler('notes:delete', async (_event, noteId) => {
   await removeStoredAttachments(noteStore.delete(noteId))
   return noteStore.list()
 })
-ipcMain.handle('notes:add-attachments', async (_event, noteId) => {
+registerIpcHandler('notes:add-attachments', async (_event, noteId) => {
   if (!noteStore.list().some(note => note.id === noteId)) {
     throw new TypeError('The note for these attachments does not exist.')
   }
@@ -178,12 +195,12 @@ ipcMain.handle('notes:add-attachments', async (_event, noteId) => {
     throw error
   }
 })
-ipcMain.handle('notes:remove-attachment', async (_event, noteId, attachmentId) => {
+registerIpcHandler('notes:remove-attachment', async (_event, noteId, attachmentId) => {
   const filePath = noteStore.removeAttachment(noteId, attachmentId)
   if (filePath) await removeStoredAttachments([filePath])
   return noteStore.list().find(note => note.id === noteId)?.attachments || []
 })
-ipcMain.handle('notes:open-attachment', async (_event, noteId, attachmentId) => {
+registerIpcHandler('notes:open-attachment', async (_event, noteId, attachmentId) => {
   const filePath = noteStore.attachmentPath(noteId, attachmentId)
   if (!filePath) throw new TypeError('The requested note attachment does not exist.')
   const error = await shell.openPath(getManagedAttachmentPath(filePath))
@@ -191,7 +208,7 @@ ipcMain.handle('notes:open-attachment', async (_event, noteId, attachmentId) => 
 })
 
 function createWindow() {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
     minWidth: 900,
@@ -202,12 +219,39 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      devTools: !app.isPackaged,
+    }
+  })
+
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isTrustedRendererUrl(url, {
+      isPackaged: app.isPackaged,
+      devServerUrl: process.env.VITE_DEV_SERVER_URL,
+      appPath: app.getAppPath(),
+    })) {
+      event.preventDefault()
+    }
+  })
+  mainWindow.webContents.on('will-redirect', (event, url) => {
+    if (!isTrustedRendererUrl(url, {
+      isPackaged: app.isPackaged,
+      devServerUrl: process.env.VITE_DEV_SERVER_URL,
+      appPath: app.getAppPath(),
+    })) {
+      event.preventDefault()
     }
   })
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
+  })
+  mainWindow.on('closed', () => {
+    mainWindow = null
   })
 
   if (app.isPackaged) {

@@ -196,9 +196,11 @@ The intended desktop security model includes:
 -   Explicit IPC handlers and allowlisted channels
 -   No direct database access from React
 
-The current Electron window already has context isolation enabled, Node
-integration disabled and sandboxing enabled. Feature-specific IPC and
-the database layer are not yet implemented.
+The Electron window enables context isolation and sandboxing, disables Node
+integration and webviews, and only allows navigation within the app origin.
+The preload exposes feature-specific methods rather than generic IPC. Main
+process handlers reject calls from other windows, subframes, and untrusted
+origins.
 
 For the detailed architecture, folder responsibilities, security rules,
 database plan and development sequence, see
