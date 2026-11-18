@@ -74,4 +74,37 @@ contextBridge.exposeInMainWorld('mydesk', {
       }
     },
   },
+  focus: {
+    active: () => ipcRenderer.invoke('focus:active'),
+    start: session => ipcRenderer.invoke('focus:start', session),
+    finish: (id, discard = false) => ipcRenderer.invoke('focus:finish', id, discard),
+    recordManual: session => ipcRenderer.invoke('focus:record-manual', session),
+    history: (startAt, endAt) => ipcRenderer.invoke('focus:history', startAt, endAt),
+    summary: (startAt, endAt) => ipcRenderer.invoke('focus:summary', startAt, endAt),
+    onCompleted: callback => {
+      const listener = (_event, session) => callback(session)
+      ipcRenderer.on('focus:completed', listener)
+      return () => ipcRenderer.removeListener('focus:completed', listener)
+    },
+    onError: callback => {
+      const listener = (_event, message) => callback(message)
+      ipcRenderer.on('focus:error', listener)
+      return () => ipcRenderer.removeListener('focus:error', listener)
+    },
+  },
+  settings: {
+    load: () => ipcRenderer.invoke('settings:load'),
+    save: (key, value) => ipcRenderer.invoke('settings:save', key, value),
+  },
+  backups: {
+    create: () => ipcRenderer.invoke('backups:create'),
+    restore: () => ipcRenderer.invoke('backups:restore'),
+    export: kind => ipcRenderer.invoke('backups:export', kind),
+    chooseDirectory: () => ipcRenderer.invoke('backups:choose-directory'),
+    onError: callback => {
+      const listener = (_event, message) => callback(message)
+      ipcRenderer.on('backups:error', listener)
+      return () => ipcRenderer.removeListener('backups:error', listener)
+    },
+  },
 })

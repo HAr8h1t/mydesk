@@ -71,6 +71,13 @@ class AlarmStore {
     }
   }
 
+  exportHistory() {
+    return this.database.prepare(`
+      SELECT id, alarm_id AS alarmId, label, action, occurred_at AS occurredAt
+      FROM alarm_history ORDER BY occurred_at DESC
+    `).all()
+  }
+
   save(alarms, profiles) {
     if (!Array.isArray(alarms) || !Array.isArray(profiles)) {
       throw new TypeError('Alarm and profile lists must be arrays.')

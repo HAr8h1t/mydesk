@@ -1618,7 +1618,7 @@ button {
 .note-attachment span,
 .note-attachment > button:last-child {
   color: #9b9c95;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .note-history-toggle {
@@ -2261,7 +2261,7 @@ button {
   align-items: center;
   gap: 7px;
   color: #85867f;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .timeline-select-label select {
@@ -2431,7 +2431,7 @@ button {
   border-radius: 6px;
   color: #73746d;
   background: #f2f2ee;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   text-transform: capitalize;
 }
@@ -2507,7 +2507,7 @@ button {
   padding-top: 11px;
   border-top: 1px solid #f0f0ec;
   color: #999a93;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -2573,7 +2573,7 @@ button {
   }
 
   .timeline-entry-time {
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .timeline-entry-icon {
@@ -2586,7 +2586,830 @@ button {
   }
 
   .timeline-entry-copy > p {
-    font-size: 11px;
+    font-size: 12px;
+  }
+}
+
+.focus-session-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.focus-session-card,
+.focus-session-stats,
+.focus-manual-card,
+.focus-history-card,
+.settings-card {
+  padding: 22px;
+}
+
+.focus-session-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.focus-session-icon {
+  display: grid;
+  width: 43px;
+  height: 43px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 13px;
+  color: #c97756;
+  background: #fff0e8;
+}
+
+.focus-session-heading .eyebrow,
+.focus-session-stats .eyebrow {
+  margin: 0 0 5px;
+}
+
+.focus-session-heading h2,
+.focus-session-stats h2 {
+  margin: 0;
+  color: #3a3b36;
+  font-size: 19px;
+}
+
+.focus-session-clock {
+  margin: 22px 0 15px;
+  color: #343531;
+  font-size: clamp(48px, 8vw, 72px);
+  font-weight: 700;
+  letter-spacing: -3px;
+  line-height: 1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.focus-session-clock-active {
+  color: #c97756;
+}
+
+.focus-session-track,
+.focus-category-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #f0efea;
+}
+
+.focus-session-track span,
+.focus-category-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #dc8a68;
+  transition: width 180ms ease;
+}
+
+.focus-session-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 18px 0 14px;
+}
+
+.focus-session-options .task-form-field:last-child:nth-child(3) {
+  grid-column: 1 / -1;
+}
+
+.focus-session-options .task-form-field,
+.focus-manual-form .task-form-field {
+  display: grid;
+  gap: 6px;
+}
+
+.focus-session-options .task-form-field > span,
+.focus-manual-form .task-form-field > span {
+  color: #72736d;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.focus-session-options select,
+.focus-manual-form input,
+.focus-manual-form select {
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid #e8e8e2;
+  border-radius: 8px;
+  color: #44453f;
+  background: #fff;
+}
+
+.focus-session-start {
+  width: 100%;
+  min-height: 42px;
+}
+
+.focus-session-controls {
+  display: flex;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 16px;
+}
+
+.focus-planned-actual {
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  margin-top: 18px;
+  color: #777870;
+  font-size: 12px;
+}
+
+.focus-planned-actual b {
+  color: #44453f;
+}
+
+.focus-time-totals {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.focus-time-totals > div {
+  display: grid;
+  gap: 7px;
+  padding: 13px;
+  border-radius: 11px;
+  background: #faf6f2;
+}
+
+.focus-time-totals span {
+  color: #8b8981;
+  font-size: 12px;
+}
+
+.focus-time-totals strong {
+  color: #44453f;
+  font-size: 22px;
+}
+
+.focus-category-list {
+  display: grid;
+  gap: 13px;
+}
+
+.focus-category-row {
+  display: grid;
+  grid-template-columns: minmax(65px, 0.7fr) minmax(40px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: #777870;
+  font-size: 12px;
+}
+
+.focus-category-row b {
+  color: #55564f;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.focus-category-track {
+  height: 6px;
+}
+
+.focus-category-track i {
+  background: #82a88b;
+}
+
+.focus-empty {
+  margin: 12px 0 0;
+  color: #92938c;
+  font-size: 13px;
+}
+
+.focus-manual-card,
+.focus-history-card,
+.settings-card {
+  margin-bottom: 16px;
+}
+
+.focus-manual-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr)) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.focus-manual-form .primary-button {
+  min-height: 38px;
+}
+
+.focus-history-list {
+  display: grid;
+}
+
+.focus-history-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 0;
+  border-bottom: 1px solid #f0f0ec;
+}
+
+.focus-history-row:last-child {
+  border-bottom: 0;
+}
+
+.focus-history-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #d98262;
+}
+
+.focus-history-row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.focus-history-row strong {
+  color: #44453f;
+  font-size: 13px;
+}
+
+.focus-history-row span:not(.focus-history-dot),
+.focus-history-row > b {
+  color: #85867f;
+  font-size: 12px;
+}
+
+.settings-card .section-heading {
+  margin-bottom: 15px;
+}
+
+.settings-description,
+.backup-folder {
+  color: #85867f;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.theme-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.theme-option {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e8e8e2;
+  border-radius: 11px;
+  color: #454640;
+  background: #fff;
+  text-align: left;
+}
+
+.theme-option-selected {
+  outline: 2px solid #d98262;
+  outline-offset: 1px;
+}
+
+.theme-option strong {
+  font-size: 13px;
+}
+
+.theme-option small {
+  color: #85867f;
+  font-size: 12px;
+}
+
+.theme-swatch {
+  display: flex;
+  width: 100%;
+  height: 37px;
+  align-items: end;
+  gap: 5px;
+  padding: 5px;
+  border: 1px solid rgba(30, 30, 30, 0.08);
+  border-radius: 7px;
+  background: #f7f5f0;
+}
+
+.theme-swatch i {
+  width: 19px;
+  height: 19px;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.theme-swatch i:last-child {
+  background: #d98262;
+}
+
+.theme-option-dark .theme-swatch {
+  background: #222828;
+}
+
+.theme-option-dark .theme-swatch i:first-child {
+  background: #343c3c;
+}
+
+.theme-option-dark .theme-swatch i:nth-child(2) {
+  background: #f1eee8;
+}
+
+.theme-option-dark .theme-swatch i:last-child {
+  background: #e19a76;
+}
+
+.theme-option-ocean .theme-swatch {
+  background: #eef5f8;
+}
+
+.theme-option-ocean .theme-swatch i:last-child {
+  background: #4d8eaf;
+}
+
+.theme-option-forest .theme-swatch {
+  background: #f0f5ef;
+}
+
+.theme-option-forest .theme-swatch i:last-child {
+  background: #5f9270;
+}
+
+.backup-preference-row,
+.settings-actions,
+.settings-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.backup-preference-row {
+  justify-content: space-between;
+}
+
+.backup-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #55564f;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.backup-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: #d98262;
+}
+
+.backup-folder {
+  overflow-wrap: anywhere;
+}
+
+.settings-success {
+  margin: -8px 0 16px;
+  padding: 11px 14px;
+  border: 1px solid #dcebdd;
+  border-radius: 9px;
+  color: #467452;
+  background: #f1f8f1;
+  font-size: 13px;
+}
+
+.app-shell[data-theme="dark"] {
+  color: #e7e9e5;
+  background: #171c1c;
+  color-scheme: dark;
+}
+
+.app-shell[data-theme="dark"] .sidebar,
+.app-shell[data-theme="dark"] .topbar,
+.app-shell[data-theme="dark"] .surface-card,
+.app-shell[data-theme="dark"] .summary-card,
+.app-shell[data-theme="dark"] .task-entry,
+.app-shell[data-theme="dark"] .theme-option,
+.app-shell[data-theme="dark"] .task-list-card,
+.app-shell[data-theme="dark"] .calendar-grid-card,
+.app-shell[data-theme="dark"] .timeline-list-card {
+  border-color: #343b3a;
+  background-color: #222929;
+}
+
+.app-shell[data-theme="dark"] .topbar {
+  background-color: rgba(31, 38, 38, 0.94);
+}
+
+.app-shell[data-theme="dark"] :where(h1, h2, h3, p, strong, span, label, button, small, time, select, input, textarea, a) {
+  color: #e4e8e4;
+}
+
+.app-shell[data-theme="dark"] .eyebrow,
+.app-shell[data-theme="dark"] .welcome-subtitle,
+.app-shell[data-theme="dark"] .settings-description,
+.app-shell[data-theme="dark"] .backup-folder,
+.app-shell[data-theme="dark"] .breadcrumb,
+.app-shell[data-theme="dark"] .focus-empty,
+.app-shell[data-theme="dark"] .timeline-sources {
+  color: #a9b2ae;
+}
+
+.app-shell[data-theme="dark"] .nav-item-active,
+.app-shell[data-theme="dark"] .nav-item-active:hover {
+  color: #f0b091;
+  background: #3b302b;
+}
+
+.app-shell[data-theme="dark"] .sidebar-tip,
+.app-shell[data-theme="dark"] .focus-card {
+  border-color: #414542;
+  background: linear-gradient(135deg, #343431, #252b2a);
+}
+
+.app-shell[data-theme="dark"] .brand-mark {
+  color: #fff;
+  background: #c97656;
+}
+
+.app-shell[data-theme="dark"] .brand-period,
+.app-shell[data-theme="dark"] .welcome-row h1 span,
+.app-shell[data-theme="dark"] .page-title-row h1 span,
+.app-shell[data-theme="dark"] .coming-soon h1 span {
+  color: #f0b091;
+}
+
+.app-shell[data-theme="dark"] .tip-icon,
+.app-shell[data-theme="dark"] .date-pill,
+.app-shell[data-theme="dark"] .summary-peach,
+.app-shell[data-theme="dark"] .summary-mint,
+.app-shell[data-theme="dark"] .summary-lavender {
+  color: #f0b091;
+  background: #3b302b;
+}
+
+.app-shell[data-theme="dark"] .nav-count,
+.app-shell[data-theme="dark"] .calendar-today,
+.app-shell[data-theme="dark"] .calendar-arrow,
+.app-shell[data-theme="dark"] .calendar-view-tabs button {
+  border-color: #414a48;
+  color: #d7ddda;
+  background: #303837;
+}
+
+.app-shell[data-theme="dark"] .calendar-today:hover,
+.app-shell[data-theme="dark"] .calendar-arrow:hover,
+.app-shell[data-theme="dark"] .calendar-view-tabs button:hover {
+  border-color: #94644f;
+  color: #f0b091;
+}
+
+.app-shell[data-theme="dark"] .task-status-label,
+.app-shell[data-theme="dark"] .timeline-status,
+.app-shell[data-theme="dark"] .reminder-status,
+.app-shell[data-theme="dark"] .calendar-month-day {
+  border-color: #424a47;
+  color: #d7ddda;
+  background: #303837;
+}
+
+.app-shell[data-theme="dark"] .calendar-month-day:hover,
+.app-shell[data-theme="dark"] .calendar-month-day.calendar-selected-cell,
+.app-shell[data-theme="dark"] .calendar-month-day.calendar-outside-month {
+  background: #28302f;
+}
+
+.app-shell[data-theme="dark"] .calendar-month-day.calendar-today-cell .calendar-day-number {
+  color: #fff;
+  background: #c97656;
+}
+
+.app-shell[data-theme="dark"] .calendar-view-tabs {
+  border-color: #414a48;
+  background: #303837;
+}
+
+.app-shell[data-theme="dark"] .calendar-view-tabs button.calendar-view-active {
+  border-color: #414a48;
+  color: #f0b091;
+  background: #222929;
+}
+
+.app-shell[data-theme="dark"] .primary-button,
+.app-shell[data-theme="dark"] .focus-button {
+  color: #fff;
+  background: #c97656;
+}
+
+.app-shell[data-theme="dark"] .primary-button:hover,
+.app-shell[data-theme="dark"] .focus-button:hover {
+  background: #b96749;
+}
+
+.app-shell[data-theme="dark"] .focus-session-options select,
+.app-shell[data-theme="dark"] .focus-manual-form input,
+.app-shell[data-theme="dark"] .focus-manual-form select,
+.app-shell[data-theme="dark"] input,
+.app-shell[data-theme="dark"] textarea,
+.app-shell[data-theme="dark"] select {
+  border-color: #414a48;
+  color: #e4e8e4;
+  background-color: #1b2222;
+}
+
+.app-shell[data-theme="dark"] input::placeholder,
+.app-shell[data-theme="dark"] textarea::placeholder {
+  color: #89938e;
+}
+
+.app-shell[data-theme="dark"] .focus-time-totals > div,
+.app-shell[data-theme="dark"] .focus-session-track,
+.app-shell[data-theme="dark"] .focus-category-track,
+.app-shell[data-theme="dark"] .theme-swatch {
+  background-color: #303837;
+}
+
+.app-shell[data-theme="dark"] .focus-history-row,
+.app-shell[data-theme="dark"] .focus-session-icon,
+.app-shell[data-theme="dark"] .settings-success {
+  border-color: #39413f;
+}
+
+.app-shell[data-theme="dark"] .focus-session-icon {
+  color: #f0b091;
+  background: #3b302b;
+}
+
+.app-shell[data-theme="dark"] .focus-session-clock-active {
+  color: #f0b091;
+}
+
+.app-shell[data-theme="dark"] .theme-option-selected {
+  outline-color: #e19a76;
+}
+
+.app-shell[data-theme="dark"] .settings-success {
+  color: #a9d2a9;
+  background: #26352b;
+}
+
+.app-shell[data-theme="ocean"] {
+  background: #f0f6f9;
+}
+
+.app-shell[data-theme="ocean"] .sidebar,
+.app-shell[data-theme="ocean"] .topbar,
+.app-shell[data-theme="ocean"] .surface-card,
+.app-shell[data-theme="ocean"] .summary-card,
+.app-shell[data-theme="ocean"] .task-entry,
+.app-shell[data-theme="ocean"] .theme-option {
+  border-color: #dce8ed;
+  background-color: #fff;
+}
+
+.app-shell[data-theme="ocean"] .brand-mark,
+.app-shell[data-theme="ocean"] .brand-period,
+.app-shell[data-theme="ocean"] .welcome-row h1 span,
+.app-shell[data-theme="ocean"] .page-title-row h1 span,
+.app-shell[data-theme="ocean"] .coming-soon h1 span {
+  color: #367697;
+}
+
+.app-shell[data-theme="ocean"] .brand-mark {
+  color: #fff;
+  background: #4d8eaf;
+}
+
+.app-shell[data-theme="ocean"] .progress-value,
+.app-shell[data-theme="ocean"] .timeline-progress-track span,
+.app-shell[data-theme="ocean"] .calendar-month-day.calendar-today-cell .calendar-day-number {
+  background: #4d8eaf;
+}
+
+.app-shell[data-theme="ocean"] .task-status-label,
+.app-shell[data-theme="ocean"] .timeline-status,
+.app-shell[data-theme="ocean"] .reminder-status {
+  border-color: #dce8ed;
+  color: #367697;
+  background: #e7f2f7;
+}
+
+.app-shell[data-theme="ocean"] .calendar-month-day.calendar-selected-cell,
+.app-shell[data-theme="ocean"] .calendar-month-day:hover {
+  background: #f1f8fb;
+}
+
+.app-shell[data-theme="ocean"] .calendar-view-tabs button.calendar-view-active {
+  color: #367697;
+  background: #fff;
+}
+
+.app-shell[data-theme="ocean"] .focus-card {
+  background: linear-gradient(112deg, #477f9b, #5b97b1 58%, #79abc0);
+}
+
+.app-shell[data-theme="ocean"] .sidebar-tip {
+  border-color: #dce8ed;
+  background: linear-gradient(140deg, #f3f9fb, #eaf4f8);
+}
+
+.app-shell[data-theme="ocean"] .tip-icon,
+.app-shell[data-theme="ocean"] .summary-peach,
+.app-shell[data-theme="ocean"] .summary-mint,
+.app-shell[data-theme="ocean"] .summary-lavender {
+  color: #367697;
+  background: #e7f2f7;
+}
+
+.app-shell[data-theme="ocean"] .date-pill {
+  border-color: #dce8ed;
+  color: #367697;
+  background: #fff;
+}
+
+.app-shell[data-theme="ocean"] .nav-item-active,
+.app-shell[data-theme="ocean"] .nav-item-active:hover {
+  color: #367697;
+  background: #e7f2f7;
+}
+
+.app-shell[data-theme="ocean"] .primary-button,
+.app-shell[data-theme="ocean"] .focus-button {
+  color: #fff;
+  background: #4d8eaf;
+}
+
+.app-shell[data-theme="ocean"] .primary-button:hover,
+.app-shell[data-theme="ocean"] .focus-button:hover {
+  background: #3b7899;
+}
+
+.app-shell[data-theme="ocean"] .focus-session-clock-active,
+.app-shell[data-theme="ocean"] .focus-session-icon {
+  color: #367fa1;
+}
+
+.app-shell[data-theme="ocean"] .focus-session-icon {
+  background: #e7f2f7;
+}
+
+.app-shell[data-theme="ocean"] .focus-session-track span,
+.app-shell[data-theme="ocean"] .focus-history-dot {
+  background: #4d8eaf;
+}
+
+.app-shell[data-theme="ocean"] .theme-option-selected {
+  outline-color: #4d8eaf;
+}
+
+.app-shell[data-theme="forest"] {
+  background: #f1f6ef;
+}
+
+.app-shell[data-theme="forest"] .sidebar,
+.app-shell[data-theme="forest"] .topbar,
+.app-shell[data-theme="forest"] .surface-card,
+.app-shell[data-theme="forest"] .summary-card,
+.app-shell[data-theme="forest"] .task-entry,
+.app-shell[data-theme="forest"] .theme-option {
+  border-color: #dfe9dc;
+  background-color: #fff;
+}
+
+.app-shell[data-theme="forest"] .brand-mark,
+.app-shell[data-theme="forest"] .brand-period,
+.app-shell[data-theme="forest"] .welcome-row h1 span,
+.app-shell[data-theme="forest"] .page-title-row h1 span,
+.app-shell[data-theme="forest"] .coming-soon h1 span {
+  color: #477a57;
+}
+
+.app-shell[data-theme="forest"] .brand-mark {
+  color: #fff;
+  background: #5f9270;
+}
+
+.app-shell[data-theme="forest"] .progress-value,
+.app-shell[data-theme="forest"] .timeline-progress-track span,
+.app-shell[data-theme="forest"] .calendar-month-day.calendar-today-cell .calendar-day-number {
+  background: #5f9270;
+}
+
+.app-shell[data-theme="forest"] .task-status-label,
+.app-shell[data-theme="forest"] .timeline-status,
+.app-shell[data-theme="forest"] .reminder-status {
+  border-color: #dfe9dc;
+  color: #477a57;
+  background: #eaf3e8;
+}
+
+.app-shell[data-theme="forest"] .calendar-month-day.calendar-selected-cell,
+.app-shell[data-theme="forest"] .calendar-month-day:hover {
+  background: #f2f7f0;
+}
+
+.app-shell[data-theme="forest"] .calendar-view-tabs button.calendar-view-active {
+  color: #477a57;
+  background: #fff;
+}
+
+.app-shell[data-theme="forest"] .focus-card {
+  background: linear-gradient(112deg, #587e62, #729779 58%, #8bab88);
+}
+
+.app-shell[data-theme="forest"] .sidebar-tip {
+  border-color: #dfe9dc;
+  background: linear-gradient(140deg, #f4f8f2, #ebf3e8);
+}
+
+.app-shell[data-theme="forest"] .tip-icon,
+.app-shell[data-theme="forest"] .summary-peach,
+.app-shell[data-theme="forest"] .summary-mint,
+.app-shell[data-theme="forest"] .summary-lavender {
+  color: #477a57;
+  background: #eaf3e8;
+}
+
+.app-shell[data-theme="forest"] .date-pill {
+  border-color: #dfe9dc;
+  color: #477a57;
+  background: #fff;
+}
+
+.app-shell[data-theme="forest"] .nav-item-active,
+.app-shell[data-theme="forest"] .nav-item-active:hover {
+  color: #477a57;
+  background: #eaf3e8;
+}
+
+.app-shell[data-theme="forest"] .primary-button,
+.app-shell[data-theme="forest"] .focus-button {
+  color: #fff;
+  background: #5f9270;
+}
+
+.app-shell[data-theme="forest"] .primary-button:hover,
+.app-shell[data-theme="forest"] .focus-button:hover {
+  background: #4d7e5e;
+}
+
+.app-shell[data-theme="forest"] .focus-session-clock-active,
+.app-shell[data-theme="forest"] .focus-session-icon {
+  color: #477a57;
+}
+
+.app-shell[data-theme="forest"] .focus-session-icon {
+  background: #eaf3e8;
+}
+
+.app-shell[data-theme="forest"] .focus-session-track span,
+.app-shell[data-theme="forest"] .focus-history-dot {
+  background: #5f9270;
+}
+
+.app-shell[data-theme="forest"] .theme-option-selected {
+  outline-color: #5f9270;
+}
+
+@media (max-width: 850px) {
+  .focus-session-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .focus-manual-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .theme-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 540px) {
+  .focus-session-card,
+  .focus-session-stats,
+  .focus-manual-card,
+  .focus-history-card,
+  .settings-card {
+    padding: 15px;
+  }
+
+  .focus-manual-form,
+  .focus-session-options {
+    grid-template-columns: 1fr;
+  }
+
+  .focus-session-options .task-form-field:last-child:nth-child(3) {
+    grid-column: auto;
+  }
+
+  .focus-manual-form .primary-button {
+    width: 100%;
   }
 }
 
@@ -3904,7 +4727,7 @@ button {
 .contextual-reminder-card .eyebrow {
   margin: 0 0 7px;
   color: #b8795b;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.09em;
 }
@@ -3997,7 +4820,7 @@ button {
   border-radius: 6px;
   color: #6d6e67;
   background: #f3f3ef;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
 }
 
@@ -4036,7 +4859,7 @@ button {
 .reminder-linked-source,
 .reminder-paused-reason {
   color: #999a93;
-  font-size: 11px;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 
@@ -4049,7 +4872,7 @@ button {
   border-radius: 999px;
   color: #7d7e76;
   background: #f3f3ef;
-  font-size: 10px;
+  font-size: 11px;
   text-transform: capitalize;
 }
 
@@ -4083,7 +4906,7 @@ button {
 .reminder-card-actions .calendar-today {
   min-height: 31px;
   padding: 0 8px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .reminder-editor-modal {

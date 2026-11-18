@@ -13,12 +13,12 @@ Android.
 
 ------------------------------------------------------------------------
 
-> **Project status: Early development**
+> **Project status: Active development**
 >
-> The initial Windows desktop shell is running with React, Vite and
-> Electron. Most productivity features and the persistence layer are
-> still being designed or implemented. This repository is under active
-> development; expect changes.
+> The Windows desktop build has working task, calendar, timeline, reminder,
+> alarm and notes modules backed by SQLite and Electron IPC. Focus tracking,
+> selectable themes, and backup/export are also available. The Password Vault,
+> Android support, and database migrations remain future work.
 
 ## Overview
 
@@ -50,8 +50,8 @@ capabilities for each platform.
 
 ## Planned features
 
-The following describes the product direction. These features are not
-all implemented yet.
+The desktop application currently includes the core modules below. Platform
+support and some advanced capabilities remain under development.
 
   -----------------------------------------------------------------------
   Module                              Planned capabilities
@@ -61,7 +61,12 @@ all implemented yet.
                                       productivity overview
 
   Calendar                            Month, week and day views; local
-                                      events; date navigation
+                                      events; date navigation; tasks and
+                                      recurring events
+
+  Daily Timeline                     Tasks, events, reminders, alarms,
+                                      notes, focus sessions and schedule
+                                      history for a selected date
 
   Tasks                               Create, edit, complete, categorize,
                                       prioritize and schedule tasks
@@ -74,6 +79,9 @@ all implemented yet.
 
   Notes                               Create, edit, search and organize
                                       notes with automatic saving
+
+  Focus                               Focus and break timers, manual time
+                                      entry, task-linked sessions and totals
 
   Password Vault                      Secure local credential storage
                                       using established cryptographic
@@ -111,8 +119,8 @@ These are exploratory ideas, not current commitments.
   Frontend tooling           Vite
   Desktop runtime            Electron
   Main-process runtime       Node.js through Electron
-  Local database (planned)   SQLite
-  SQLite driver (planned)    better-sqlite3
+  Local database             SQLite in the Electron main process
+  SQLite API                 Node.js built-in node:sqlite
   Packaging                  Electron Builder
 
 ### Planned Android support
@@ -251,10 +259,9 @@ npm run build
 npm run dist
 ```
 
-<<<<<<< HEAD
 The installer/build output is configured to go into the `release/`
 directory. Packaging should be tested as the project evolves, especially
-after native Node.js modules such as `better-sqlite3` are introduced.
+after Electron or the bundled Node.js runtime is upgraded.
 
 ## Repository structure
 
@@ -306,14 +313,14 @@ feature work expands.
 -   [x] Add a basic MyDesk dashboard and navigation
 -   [x] Configure the initial Electron security preferences
 -   [ ] Review and stabilize the application structure
--   [ ] Implement a narrow, validated IPC API
--   [ ] Integrate SQLite in the Electron main process
+-   [x] Implement a narrow, validated IPC API
+-   [x] Integrate SQLite in the Electron main process
 -   [ ] Add versioned database migrations
 -   [ ] Add repositories and application use cases
--   [ ] Implement persistent settings
+-   [x] Implement persistent settings and color themes
 -   [ ] Establish reusable UI components and design tokens
--   [ ] Implement tasks, notes, calendar, reminders and alarms
--   [ ] Add backup, restore and export
+-   [x] Implement tasks, notes, calendar, reminders and alarms
+-   [x] Add backup, restore and JSON export
 -   [ ] Design and review the Password Vault security model
 -   [ ] Test and package Windows releases
 -   [ ] Prepare shared platform contracts for mobile
@@ -347,44 +354,31 @@ are welcome.
 Please avoid introducing a new dependency or architectural pattern
 without explaining the problem it solves.
 
-## License
+## Current desktop implementation
 
-The project license will be documented here once it has been finalized.
-=======
-Desktop tasks are stored in SQLite and managed through Electron IPC. Task
-subtasks, dependencies, attachments, and activity history are stored with the
-task record. Notes and calendar events use local storage. Calendar task entries
-are derived from task dates, so rescheduling a task updates its calendar entry.
+Tasks, reminders, alarms, notes, focus sessions, settings and calendar events
+are stored in SQLite and accessed through the allowlisted Electron preload API.
+Calendar task entries are derived from task dates rather than stored as
+duplicate events. The Daily Timeline combines task, event, reminder, alarm,
+note, focus-session and task-history activity for a selected day.
 
-The Daily Timeline brings together tasks, reminders, events, notes, and task
-schedule history for a selected date. Task history is indexed by activity date
-in SQLite for date-based timeline queries.
+Focus sessions support a timer, manual time entry, task links, session history,
+daily and weekly totals, and updating task actual-time totals. Themes include
+warm, dark, ocean and forest palettes.
 
-Reminders are stored in the same SQLite database and linked to existing task
-or event IDs. The Electron main process schedules one-time and recurring
-reminders, sends desktop notifications, and supports snooze, completion,
-priority, notification sounds, and configurable escalation intervals.
-Contextual event reminders can be created for the previous evening, one hour
-before, and fifteen minutes before an event. The scheduler runs while MyDesk is
-open; Android location-based reminders are not implemented.
-
-Tasks support dates, priorities, categories, tags, checklists, recurrence,
-dependencies, estimates, time spent, notes, attachments, status, and history.
-Smart scheduling suggests a task that fits a free hour tomorrow. The calendar
-includes month, week, day, and agenda views, recurring events, event categories,
-and drag-and-drop rescheduling.
->>>>>>> ee9f33d (Added Core Productivity System & Task managment system)
-
-## Current desktop scheduling and notes
-
-Alarms and notes are stored in the local SQLite database and accessed by React
-through the allowlisted Electron preload API. Alarms support one-time, daily,
-weekly, and custom weekday schedules, profiles, enable/disable, snooze, dismiss,
-and recent alarm history. A desktop shortcut (`Ctrl+Shift+N`) opens a quick note.
-Alarm notifications and timers only work while MyDesk is running; Windows cannot
-guarantee delivery while the PC is asleep or powered off.
+Manual backups create a validated SQLite snapshot and a companion folder for
+note attachments. Scheduled backups run daily while MyDesk is open and retain
+30 days. Restore validates the database and attachments and creates a
+pre-restore safety backup. JSON exports are available for notes, tasks,
+calendar events and the complete supported dataset. Alarm and reminder
+scheduling also require MyDesk to be running; Windows cannot guarantee
+notifications while the PC is asleep or powered off.
 
 Notes support Markdown writing and preview, autosave, categories, tags, pinning,
 archiving, daily dates, links to tasks and events, FTS5 search, version history,
-and managed file attachments. Existing notes in local storage are imported into
-SQLite on first launch.
+and managed file attachments. Existing notes and calendar events in local
+storage are imported into SQLite on first launch.
+
+## License
+
+The project license will be documented here once it has been finalized.

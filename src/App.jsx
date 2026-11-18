@@ -36,12 +36,14 @@ const initialNotes = [
 const navigation = [
   { label: 'Dashboard', icon: 'home' },
   { label: 'Timeline', icon: 'clock' },
+  { label: 'Focus', icon: 'clock' },
   { label: 'Calendar', icon: 'calendar' },
   { label: 'Tasks', icon: 'check' },
   { label: 'Reminders', icon: 'bell' },
   { label: 'Alarms', icon: 'clock' },
   { label: 'Notes', icon: 'note' },
   { label: 'Password Vault', icon: 'lock' },
+  { label: 'Settings', icon: 'settings' },
 ]
 
 const iconContent = {
@@ -52,6 +54,7 @@ const iconContent = {
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   note: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h8M8 17h6" /></>,
   lock: <><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 1 1 8 0v3M12 14v3" /></>,
+  settings: <><circle cx="12" cy="12" r="3" /><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a7.8 7.8 0 0 1-1.8 1l-.3 1.8h-2.8l-.3-1.8a7.8 7.8 0 0 1-1.8-1l-1.7.7-1.4-2.4 1.4-1.1a7.5 7.5 0 0 1 0-2l-1.4-1.1 1.4-2.4 1.7.7a7.8 7.8 0 0 1 1.8-1l.3-1.8h2.8l.3 1.8a7.8 7.8 0 0 1 1.8 1l1.7-.7 1.4 2.4-1.4 1.1a7.5 7.5 0 0 1 0 2Z" /></>,
   plus: <><path d="M12 5v14M5 12h14" /></>,
   arrow: <><path d="M5 12h14M13 6l6 6-6 6" /></>,
   search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>,
@@ -323,7 +326,7 @@ function playReminderSound(sound) {
   }
 }
 
-function timelineActivities(date, tasks, events, notes, history, reminders, alarmHistory) {
+function timelineActivities(date, tasks, events, notes, history, reminders, alarmHistory, focusSessions = []) {
   const activities = []
   const completedByDate = task => task.completedAt && localDateKey(task.completedAt) <= date
 
@@ -423,6 +426,23 @@ function timelineActivities(date, tasks, events, notes, history, reminders, alar
       taskId: entry.taskId,
     })
   })
+
+  focusSessions.filter(session => localDateKey(session.startedAt) === date && session.status !== 'discarded')
+    .forEach(session => {
+      const duration = Math.max(0, Math.round((session.durationSeconds || 0) / 60))
+      activities.push({
+        id: `focus-${session.id}`,
+        kind: 'focus',
+        title: session.mode === 'break' ? 'Break session' : session.taskTitle || 'Focus session',
+        time: formatClock(session.startedAt),
+        sortTime: localTimeKey(session.startedAt),
+        status: session.status === 'completed' ? 'completed' : 'pending',
+        detail: [
+          session.status === 'completed' ? `${duration} min` : `${session.targetMinutes} min planned`,
+          session.category,
+        ].filter(Boolean).join(' · '),
+      })
+    })
 
   reminders.forEach(reminder => {
     const completedAt = reminder.completedAt || reminder.lastCompletedAt
@@ -554,6 +574,16 @@ function App() {
     return [...imported, ...storedContent.reminders]
   })
   const [activeView, setActiveView] = useState('Dashboard')
+  const [theme, setTheme] = useState(() => readStorage('mydesk-theme', 'warm'))
+  const [settingsReady, setSettingsReady] = useState(() => !window.mydesk?.settings)
+  const [settingsError, setSettingsError] = useState('')
+  const [autoBackupEnabled, setAutoBackupEnabled] = useState(false)
+  const [backupDirectory, setBackupDirectory] = useState('')
+  const [backupError, setBackupError] = useState('')
+  const [backupMessage, setBackupMessage] = useState('')
+  const [activeFocus, setActiveFocus] = useState(null)
+  const [focusError, setFocusError] = useState('')
+  const [focusRevision, setFocusRevision] = useState(0)
   const [taskFilter, setTaskFilter] = useState('All')
   const [taskSearch, setTaskSearch] = useState('')
   const [taskStoreReady, setTaskStoreReady] = useState(() => !window.mydesk?.tasks)
@@ -573,6 +603,59 @@ function App() {
   const [selectedNoteId, setSelectedNoteId] = useState(storedContent.notes[0]?.id ?? null)
   const [showArchivedNotes, setShowArchivedNotes] = useState(false)
   const [searchResults, setSearchResults] = useState([])
+
+  useEffect(() => {
+    const database = window.mydesk?.settings
+    if (!database) return undefined
+    let active = true
+    database.load().then(async saved => {
+      if (!active) return
+      setTheme(saved.theme)
+      setAutoBackupEnabled(saved.autoBackupEnabled)
+      setBackupDirectory(saved.backupDirectory)
+      if (saved.hasCalendarEvents) {
+        setEvents(saved.events)
+      } else if (storedContent.events.length) {
+        await database.save('calendar-events', storedContent.events)
+        if (active) setEvents(storedContent.events)
+      }
+      if (active) setSettingsReady(true)
+    }).catch(error => {
+      if (active) setSettingsError(`Settings could not be loaded from the local database: ${error.message}`)
+    })
+    return () => { active = false }
+  }, [storedContent.events])
+
+  useEffect(() => {
+    const database = window.mydesk?.focus
+    if (!database) return undefined
+    let active = true
+    database.active().then(session => {
+      if (active) setActiveFocus(session)
+    }).catch(error => {
+      if (active) setFocusError(`The active focus session could not be loaded: ${error.message}`)
+    })
+    const unsubscribeCompleted = database.onCompleted(session => {
+      setActiveFocus(null)
+      setFocusRevision(value => value + 1)
+      if (session.task) {
+        setTasks(current => current.map(task => task.id === session.task.id
+          ? { ...task, actualMinutes: session.task.actualMinutes }
+          : task))
+      }
+    })
+    const unsubscribeError = database.onError(message => setFocusError(message))
+    return () => {
+      active = false
+      unsubscribeCompleted()
+      unsubscribeError()
+    }
+  }, [])
+
+  useEffect(() => {
+    const unsubscribeError = window.mydesk?.backups?.onError?.(message => setBackupError(message))
+    return () => unsubscribeError?.()
+  }, [])
 
   useEffect(() => {
     const taskDatabase = window.mydesk?.tasks
@@ -752,8 +835,16 @@ function App() {
   }, [])
 
   useEffect(() => {
-    localStorage.setItem('mydesk-events', JSON.stringify(events))
-  }, [events])
+    const database = window.mydesk?.settings
+    if (database) {
+      if (!settingsReady) return
+      database.save('calendar-events', events).then(() => setSettingsError('')).catch(error => {
+        setSettingsError(`Calendar events could not be saved to the local database: ${error.message}`)
+      })
+    } else {
+      localStorage.setItem('mydesk-events', JSON.stringify(events))
+    }
+  }, [events, settingsReady])
 
   useEffect(() => {
     const reminderDatabase = window.mydesk?.reminders
@@ -780,6 +871,71 @@ function App() {
       unsubscribeError?.()
     }
   }, [])
+
+  async function saveSetting(key, value) {
+    try {
+      if (window.mydesk?.settings) await window.mydesk.settings.save(key, value)
+      else localStorage.setItem(`mydesk-${key}`, JSON.stringify(value))
+      setSettingsError('')
+      if (key === 'theme') {
+        setTheme(value)
+      }
+      if (key === 'auto-backup-enabled') setAutoBackupEnabled(value)
+      if (key === 'backup-directory') setBackupDirectory(value)
+      return true
+    } catch (error) {
+      setSettingsError(`The setting could not be saved: ${error.message}`)
+      return false
+    }
+  }
+
+  async function startFocus(session) {
+    try {
+      const started = await window.mydesk.focus.start(session)
+      setActiveFocus(started)
+      setFocusError('')
+      return true
+    } catch (error) {
+      setFocusError(`The focus session could not be started: ${error.message}`)
+      return false
+    }
+  }
+
+  async function finishFocus(discard = false) {
+    if (!activeFocus) return false
+    try {
+      const finished = await window.mydesk.focus.finish(activeFocus.id, discard)
+      setActiveFocus(null)
+      setFocusRevision(value => value + 1)
+      if (finished?.task) {
+        setTasks(current => current.map(task => task.id === finished.task.id
+          ? { ...task, actualMinutes: finished.task.actualMinutes }
+          : task))
+      }
+      setFocusError('')
+      return true
+    } catch (error) {
+      setFocusError(`The focus session could not be ended: ${error.message}`)
+      return false
+    }
+  }
+
+  async function recordManualFocus(session) {
+    try {
+      const saved = await window.mydesk.focus.recordManual(session)
+      if (saved.task) {
+        setTasks(current => current.map(task => task.id === saved.task.id
+          ? { ...task, actualMinutes: saved.task.actualMinutes }
+          : task))
+      }
+      setFocusRevision(value => value + 1)
+      setFocusError('')
+      return true
+    } catch (error) {
+      setFocusError(`Manual time could not be recorded: ${error.message}`)
+      return false
+    }
+  }
 
   const completedTasks = tasks.filter(task => displayTaskStatus(task) === 'completed').length
   const activeTasks = tasks.length - completedTasks
@@ -1233,7 +1389,7 @@ function App() {
   ))
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-theme={theme}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><Icon name="spark" size={21} /></div>
@@ -1283,6 +1439,9 @@ function App() {
           {reminderStoreError && <div className="task-storage-error" role="alert">{reminderStoreError}</div>}
           {notesError && <div className="task-storage-error" role="alert">{notesError}</div>}
           {alarmError && <div className="task-storage-error" role="alert">{alarmError}</div>}
+          {settingsError && <div className="task-storage-error" role="alert">{settingsError}</div>}
+          {focusError && <div className="task-storage-error" role="alert">{focusError}</div>}
+          {backupError && <div className="task-storage-error" role="alert">{backupError}</div>}
           {taskActionError && <div className="task-action-error" role="alert"><span>{taskActionError}</span><button type="button" onClick={() => setTaskActionError('')}>Dismiss</button></div>}
           {activeView === 'Dashboard' && (
             <Dashboard
@@ -1320,7 +1479,17 @@ function App() {
           )}
 
           {activeView === 'Timeline' && (
-            <TimelinePage tasks={tasks} events={events} notes={notes} reminders={reminders} alarmHistory={alarmHistory} />
+            <TimelinePage tasks={tasks} events={events} notes={notes} reminders={reminders} alarmHistory={alarmHistory} focusRevision={focusRevision} />
+          )}
+
+          {activeView === 'Focus' && (
+            <FocusPage
+              tasks={tasks}
+              activeSession={activeFocus}
+              onStart={startFocus}
+              onFinish={finishFocus}
+              onRecordManual={recordManualFocus}
+            />
           )}
 
           {activeView === 'Reminders' && (
@@ -1397,7 +1566,19 @@ function App() {
             />
           )}
 
-          {!['Dashboard', 'Tasks', 'Timeline', 'Calendar', 'Reminders', 'Notes', 'Alarms'].includes(activeView) && (
+          {activeView === 'Settings' && (
+            <SettingsPage
+              theme={theme}
+              onSaveSetting={saveSetting}
+              autoBackupEnabled={autoBackupEnabled}
+              backupDirectory={backupDirectory}
+              onSetError={setBackupError}
+              message={backupMessage}
+              setMessage={setBackupMessage}
+            />
+          )}
+
+          {!['Dashboard', 'Tasks', 'Timeline', 'Focus', 'Calendar', 'Reminders', 'Notes', 'Alarms', 'Settings'].includes(activeView) && (
             <ComingSoonPage title={activeView} />
           )}
         </div>
@@ -1853,6 +2034,7 @@ function getTimelineSummary(activities) {
     reminders: activities.filter(activity => activity.kind === 'reminder').length,
     alarms: activities.filter(activity => activity.kind === 'alarm').length,
     notes: activities.filter(activity => activity.kind === 'note').length,
+    focus: activities.filter(activity => activity.kind === 'focus').length,
     changes: activities.filter(activity => activity.kind === 'activity' && activity.status === 'changed').length,
   }
 }
@@ -1869,13 +2051,316 @@ function TimelineSummary({ activities, label }) {
         <span><b>{summary.reminders}</b> {summary.reminders === 1 ? 'reminder' : 'reminders'}</span>
         <span><b>{summary.alarms}</b> {summary.alarms === 1 ? 'alarm' : 'alarms'}</span>
         <span><b>{summary.notes}</b> notes</span>
+        <span><b>{summary.focus}</b> focus sessions</span>
         <span><b>{summary.changes}</b> schedule changes</span>
       </div>
     </section>
   )
 }
 
-function TimelinePage({ tasks, events, notes, reminders, alarmHistory }) {
+function formatDuration(seconds) {
+  const totalMinutes = Math.max(0, Math.floor(seconds / 60))
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  return hours ? `${hours}h ${minutes}m` : `${minutes}m`
+}
+
+function FocusPage({ tasks, activeSession, onStart, onFinish, onRecordManual }) {
+  const [mode, setMode] = useState('focus')
+  const [duration, setDuration] = useState(25)
+  const [taskId, setTaskId] = useState('')
+  const [now, setNow] = useState(() => new Date().getTime())
+  const [history, setHistory] = useState([])
+  const [dailyTotal, setDailyTotal] = useState(0)
+  const [weeklySummary, setWeeklySummary] = useState({ totalSeconds: 0, byCategory: [] })
+  const [historyError, setHistoryError] = useState('')
+  const [manualStart, setManualStart] = useState(() => localDateTimeValue(new Date(Date.now() - 25 * 60_000)))
+  const [manualEnd, setManualEnd] = useState(() => localDateTimeValue(new Date()))
+  const [manualTaskId, setManualTaskId] = useState('')
+  const [manualCategory, setManualCategory] = useState('Personal')
+  const [manualSaving, setManualSaving] = useState(false)
+  const [manualFormError, setManualFormError] = useState('')
+  const [revision, setRevision] = useState(0)
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    const database = window.mydesk?.focus
+    if (!database) return undefined
+    let active = true
+    const today = new Date()
+    const todayStart = new Date(today)
+    todayStart.setHours(0, 0, 0, 0)
+    const tomorrow = new Date(todayStart)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    const weekStart = new Date(todayStart)
+    weekStart.setDate(weekStart.getDate() - 6)
+    Promise.all([
+      database.history(weekStart.toISOString(), tomorrow.toISOString()),
+      database.summary(todayStart.toISOString(), tomorrow.toISOString()),
+      database.summary(weekStart.toISOString(), tomorrow.toISOString()),
+    ]).then(([sessions, daily, weekly]) => {
+      if (!active) return
+      setHistory(sessions)
+      setDailyTotal(daily.totalSeconds)
+      setWeeklySummary(weekly)
+      setHistoryError('')
+    }).catch(loadError => {
+      if (active) setHistoryError(`Focus history could not be loaded: ${loadError.message}`)
+    })
+    return () => { active = false }
+  }, [revision])
+
+  const selectedTask = tasks.find(task => task.id === taskId)
+  const trackedTask = activeSession?.taskId ? tasks.find(task => task.id === activeSession.taskId) : selectedTask
+  const remaining = activeSession
+    ? Math.max(0, Math.ceil((Date.parse(activeSession.plannedEndAt) - now) / 1000))
+    : duration * 60
+  const progress = activeSession
+    ? Math.min(100, Math.max(0, 100 - remaining / (activeSession.targetMinutes * 60) * 100))
+    : 0
+
+  async function beginSession() {
+    const task = mode === 'focus' ? selectedTask : null
+    const started = await onStart({
+      id: createId(),
+      mode,
+      targetMinutes: duration,
+      taskId: task?.id || '',
+      taskTitle: task?.title || '',
+      category: task?.category || 'Personal',
+    })
+    if (started) setRevision(value => value + 1)
+  }
+
+  async function submitManual(event) {
+    event.preventDefault()
+    const startedAt = new Date(manualStart)
+    const endedAt = new Date(manualEnd)
+    const minutes = Math.round((endedAt.getTime() - startedAt.getTime()) / 60_000)
+    if (!Number.isFinite(startedAt.getTime()) || !Number.isFinite(endedAt.getTime())
+      || endedAt <= startedAt || minutes > 1440 || endedAt.getTime() > Date.now()) {
+      setManualFormError('Choose a valid past time range of no more than 24 hours.')
+      return
+    }
+    setManualFormError('')
+    setManualSaving(true)
+    const saved = await onRecordManual({
+      id: createId(),
+      startedAt: startedAt.toISOString(),
+      endedAt: endedAt.toISOString(),
+      targetMinutes: minutes,
+      taskId: manualTaskId,
+      category: manualCategory,
+    })
+    setManualSaving(false)
+    if (saved) {
+      setRevision(value => value + 1)
+      setManualEnd(localDateTimeValue(new Date()))
+    }
+  }
+
+  function finish(discard = false) {
+    onFinish(discard).then(saved => {
+      if (saved) setRevision(value => value + 1)
+    })
+  }
+
+  return (
+    <>
+      <section className="page-title-row">
+        <div><p className="eyebrow">FOCUS AND TIME TRACKING</p><h1>Make time count<span>.</span></h1><p className="welcome-subtitle">A focused session, a thoughtful break, and a clear picture of where your time goes.</p></div>
+      </section>
+
+      <section className="focus-session-grid">
+        <article className="focus-session-card surface-card">
+          <div className="focus-session-heading"><span className="focus-session-icon"><Icon name="clock" size={20} /></span><div><p className="eyebrow">{activeSession ? 'SESSION IN PROGRESS' : 'POMODORO TIMER'}</p><h2>{activeSession ? (activeSession.mode === 'break' ? 'Take a breather' : activeSession.taskTitle || 'Stay with it') : 'Set your next focus'}</h2></div></div>
+          <div className={`focus-session-clock ${activeSession ? 'focus-session-clock-active' : ''}`} aria-live="polite">
+            {String(Math.floor(remaining / 60)).padStart(2, '0')}:{String(remaining % 60).padStart(2, '0')}
+          </div>
+          <div className="focus-session-track"><span style={{ width: `${progress}%` }} /></div>
+          {activeSession ? (
+            <div className="focus-session-controls">
+              <button type="button" className="primary-button" onClick={() => finish(false)}>Finish session</button>
+              <button type="button" className="calendar-today" onClick={() => finish(true)}>Discard</button>
+            </div>
+          ) : (
+            <>
+              <div className="focus-session-options">
+                <label className="task-form-field"><span>Session</span><select value={mode} onChange={event => setMode(event.target.value)}><option value="focus">Focus</option><option value="break">Break</option></select></label>
+                <label className="task-form-field"><span>Minutes</span><select value={duration} onChange={event => setDuration(Number(event.target.value))}>{[5, 10, 15, 25, 30, 45, 60, 90, 120, 240].map(value => <option value={value} key={value}>{value} min</option>)}</select></label>
+                {mode === 'focus' && <label className="task-form-field"><span>Link a task</span><select value={taskId} onChange={event => setTaskId(event.target.value)}><option value="">No task</option>{tasks.map(task => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>}
+              </div>
+              <button type="button" className="primary-button focus-session-start" onClick={beginSession}>Start {mode === 'focus' ? 'focus' : 'break'}</button>
+            </>
+          )}
+          {trackedTask && (
+            <div className="focus-planned-actual">
+              <span><b>{trackedTask.estimatedMinutes || 0}</b> min planned</span>
+              <span><b>{trackedTask.actualMinutes || 0}</b> min tracked</span>
+            </div>
+          )}
+        </article>
+
+        <article className="focus-session-stats surface-card">
+          <p className="eyebrow">YOUR TIME, RECENTLY</p><h2>Small sessions add up.</h2>
+          <div className="focus-time-totals">
+            <div><span>Today</span><strong>{formatDuration(dailyTotal)}</strong></div>
+            <div><span>Last 7 days</span><strong>{formatDuration(weeklySummary.totalSeconds)}</strong></div>
+          </div>
+          <div className="focus-category-list">
+            {weeklySummary.byCategory.map(category => (
+              <div className="focus-category-row" key={category.category}><span>{category.category}</span><div className="focus-category-track"><i style={{ width: `${weeklySummary.totalSeconds ? Math.max(2, category.seconds / weeklySummary.totalSeconds * 100) : 0}%` }} /></div><b>{formatDuration(category.seconds)}</b></div>
+            ))}
+            {!weeklySummary.byCategory.length && <p className="focus-empty">Completed focus sessions will appear here.</p>}
+          </div>
+        </article>
+      </section>
+
+      <section className="focus-manual-card surface-card">
+        <div className="section-heading"><div><p className="eyebrow">FILL IN THE GAPS</p><h2>Record time manually</h2></div></div>
+        <form className="focus-manual-form" onSubmit={submitManual}>
+          <label className="task-form-field"><span>Started</span><input type="datetime-local" value={manualStart} onChange={event => setManualStart(event.target.value)} required /></label>
+          <label className="task-form-field"><span>Ended</span><input type="datetime-local" value={manualEnd} onChange={event => setManualEnd(event.target.value)} required /></label>
+          <label className="task-form-field"><span>Task</span><select value={manualTaskId} onChange={event => setManualTaskId(event.target.value)}><option value="">No task</option>{tasks.map(task => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
+          <label className="task-form-field"><span>Category</span><input maxLength="180" value={manualCategory} onChange={event => setManualCategory(event.target.value)} /></label>
+          <button type="submit" className="primary-button" disabled={manualSaving}>{manualSaving ? 'Saving…' : 'Save time'}</button>
+        </form>
+        {manualFormError && <p className="task-form-error" role="alert">{manualFormError}</p>}
+      </section>
+
+      <section className="focus-history-card surface-card">
+        <div className="section-heading"><div><p className="eyebrow">THE LAST 7 DAYS</p><h2>Session history</h2></div><span>{history.length} sessions</span></div>
+        {historyError && <p className="task-form-error" role="alert">{historyError}</p>}
+        {history.length ? (
+          <div className="focus-history-list">{history.slice(0, 30).map(session => (
+            <article key={session.id} className="focus-history-row">
+              <span className="focus-history-dot" />
+              <div><strong>{session.taskTitle || (session.mode === 'break' ? 'Break' : 'Focus session')}</strong><span>{new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(session.startedAt))} · {session.category}</span></div>
+              <b>{session.status === 'completed' ? formatDuration(session.durationSeconds) : session.status}</b>
+            </article>
+          ))}</div>
+        ) : <p className="focus-empty">No sessions recorded this week yet.</p>}
+      </section>
+    </>
+  )
+}
+
+function SettingsPage({ theme, onSaveSetting, autoBackupEnabled, backupDirectory, onSetError, message, setMessage }) {
+  const [busy, setBusy] = useState(false)
+  const [exporting, setExporting] = useState('')
+  const themes = [
+    { id: 'warm', label: 'Warm', description: 'Soft, familiar neutrals' },
+    { id: 'dark', label: 'Dark', description: 'A quieter low-light palette' },
+    { id: 'ocean', label: 'Ocean', description: 'Cool blue accents' },
+    { id: 'forest', label: 'Forest', description: 'Calm green accents' },
+  ]
+
+  async function chooseBackupDirectory() {
+    onSetError('')
+    try {
+      const selected = await window.mydesk.backups.chooseDirectory()
+      if (selected) {
+        const saved = await onSaveSetting('backup-directory', selected)
+        if (saved) setMessage('Automatic backup folder updated.')
+      }
+    } catch (error) {
+      onSetError(`The backup folder could not be selected: ${error.message}`)
+    }
+  }
+
+  async function createBackup() {
+    setBusy(true)
+    setMessage('')
+    onSetError('')
+    try {
+      const result = await window.mydesk.backups.create()
+      if (!result.canceled) setMessage(`Backup saved as ${result.filePath.split(/[\\/]/).pop()}.`)
+    } catch (error) {
+      onSetError(`Backup failed: ${error.message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function restoreBackup() {
+    if (!window.confirm('Restore replaces your current MyDesk data. A safety backup will be created first. Continue?')) return
+    setBusy(true)
+    setMessage('')
+    onSetError('')
+    try {
+      const result = await window.mydesk.backups.restore()
+      if (!result.canceled) {
+        setMessage(`Data restored. Safety copy: ${result.safetyBackup}. Reloading…`)
+        window.setTimeout(() => window.location.reload(), 700)
+      }
+    } catch (error) {
+      onSetError(`Restore failed: ${error.message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function exportData(kind) {
+    setExporting(kind)
+    setMessage('')
+    onSetError('')
+    try {
+      const result = await window.mydesk.backups.export(kind)
+      if (!result.canceled) setMessage(`Export saved as ${result.filePath.split(/[\\/]/).pop()}.`)
+    } catch (error) {
+      onSetError(`Export failed: ${error.message}`)
+    } finally {
+      setExporting('')
+    }
+  }
+
+  return (
+    <>
+      <section className="page-title-row"><div><p className="eyebrow">MAKE MYDESK YOURS</p><h1>Settings<span>.</span></h1><p className="welcome-subtitle">Choose a color palette and keep your local data safe and portable.</p></div></section>
+      {message && <div className="settings-success" role="status">{message}</div>}
+      <section className="settings-card surface-card">
+        <div className="section-heading"><div><p className="eyebrow">APPEARANCE</p><h2>Color mode</h2></div></div>
+        <div className="theme-options">
+          {themes.map(option => (
+            <button type="button" key={option.id} className={`theme-option theme-option-${option.id} ${theme === option.id ? 'theme-option-selected' : ''}`} aria-pressed={theme === option.id} onClick={() => onSaveSetting('theme', option.id)}>
+              <span className="theme-swatch"><i /><i /><i /></span><strong>{option.label}</strong><small>{option.description}</small>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="settings-card surface-card">
+        <div className="section-heading"><div><p className="eyebrow">LOCAL-FIRST SAFETY</p><h2>Backup and restore</h2></div></div>
+        <p className="settings-description">A backup includes your SQLite data and a companion folder for note attachments. MyDesk must be running for scheduled backups to run.</p>
+        <div className="backup-preference-row">
+          <label className="backup-toggle"><input type="checkbox" checked={autoBackupEnabled} onChange={event => onSaveSetting('auto-backup-enabled', event.target.checked)} /><span>Automatic daily backup</span></label>
+          <button type="button" className="calendar-today" onClick={chooseBackupDirectory} disabled={busy}>Choose folder</button>
+        </div>
+        <p className="backup-folder">{backupDirectory || 'Default folder: MyDesk application data / backups'} · keeps the latest 30 days</p>
+        <div className="settings-actions">
+          <button type="button" className="primary-button" onClick={createBackup} disabled={busy}>{busy ? 'Working…' : 'Create backup'}</button>
+          <button type="button" className="calendar-today" onClick={restoreBackup} disabled={busy}>Restore backup…</button>
+        </div>
+      </section>
+
+      <section className="settings-card surface-card">
+        <div className="section-heading"><div><p className="eyebrow">TAKE YOUR DATA WITH YOU</p><h2>Export data</h2></div></div>
+        <p className="settings-description">JSON exports include linked content; note attachments are embedded as Base64 data.</p>
+        <div className="settings-export-actions">
+          {[['all', 'Everything'], ['notes', 'Notes'], ['tasks', 'Tasks'], ['calendar', 'Calendar']].map(([kind, label]) => (
+            <button type="button" className="calendar-today" key={kind} onClick={() => exportData(kind)} disabled={Boolean(exporting) || busy}>{exporting === kind ? 'Exporting…' : `Export ${label}`}</button>
+          ))}
+        </div>
+      </section>
+    </>
+  )
+}
+
+function TimelinePage({ tasks, events, notes, reminders, alarmHistory, focusRevision }) {
   const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date()))
   const [compareDate, setCompareDate] = useState('')
   const [search, setSearch] = useState('')
@@ -1883,6 +2368,8 @@ function TimelinePage({ tasks, events, notes, reminders, alarmHistory }) {
   const [statusFilter, setStatusFilter] = useState('all')
   const [historyByDate, setHistoryByDate] = useState({})
   const [historyErrors, setHistoryErrors] = useState({})
+  const [focusByDate, setFocusByDate] = useState({})
+  const [focusError, setFocusError] = useState('')
 
   useEffect(() => {
     let active = true
@@ -1917,6 +2404,28 @@ function TimelinePage({ tasks, events, notes, reminders, alarmHistory }) {
     return () => { active = false }
   }, [compareDate, selectedDate, tasks])
 
+  useEffect(() => {
+    const focusDatabase = window.mydesk?.focus
+    if (!focusDatabase) return undefined
+    let active = true
+    const dates = [...new Set([selectedDate, compareDate].filter(Boolean))]
+    Promise.all(dates.map(date => {
+      const start = parseDateKey(date)
+      const end = addDays(start, 1)
+      return focusDatabase.history(start.toISOString(), end.toISOString())
+    })).then(records => {
+      if (!active) return
+      setFocusByDate(current => ({
+        ...current,
+        ...Object.fromEntries(dates.map((date, index) => [date, records[index]])),
+      }))
+      setFocusError('')
+    }).catch(error => {
+      if (active) setFocusError(`Focus history could not be loaded: ${error.message}`)
+    })
+    return () => { active = false }
+  }, [compareDate, focusRevision, selectedDate])
+
   function moveDate(amount) {
     setSelectedDate(dateKey(addDays(parseDateKey(selectedDate), amount)))
   }
@@ -1929,6 +2438,7 @@ function TimelinePage({ tasks, events, notes, reminders, alarmHistory }) {
     historyByDate[selectedDate] || [],
     reminders,
     alarmHistory,
+    focusByDate[selectedDate] || [],
   )
   const formattedDate = new Intl.DateTimeFormat('en', {
     weekday: 'long',
@@ -1945,13 +2455,15 @@ function TimelinePage({ tasks, events, notes, reminders, alarmHistory }) {
       .toLowerCase().includes(query)
   })
   const compareActivities = compareDate
-    ? timelineActivities(compareDate, tasks, events, notes, historyByDate[compareDate] || [], reminders, alarmHistory)
+    ? timelineActivities(compareDate, tasks, events, notes, historyByDate[compareDate] || [], reminders, alarmHistory, focusByDate[compareDate] || [])
     : []
   const selectedSummary = getTimelineSummary(currentActivities)
   const compareSummary = getTimelineSummary(compareActivities)
   const historyLoading = (
     !Object.prototype.hasOwnProperty.call(historyByDate, selectedDate) && !historyErrors[selectedDate]
   ) || Boolean(compareDate && !Object.prototype.hasOwnProperty.call(historyByDate, compareDate) && !historyErrors[compareDate])
+    || Boolean(window.mydesk?.focus && !Object.prototype.hasOwnProperty.call(focusByDate, selectedDate))
+    || Boolean(compareDate && window.mydesk?.focus && !Object.prototype.hasOwnProperty.call(focusByDate, compareDate))
   const historyError = historyErrors[selectedDate] || (compareDate && historyErrors[compareDate])
   const compareDifference = selectedSummary.completed - compareSummary.completed
   const comparisonMessage = compareDate === selectedDate
@@ -1981,7 +2493,7 @@ function TimelinePage({ tasks, events, notes, reminders, alarmHistory }) {
       <section className="timeline-controls surface-card">
         <label><Icon name="search" size={17} /><input aria-label="Search timeline" placeholder="Search this day’s activities..." value={search} onChange={event => setSearch(event.target.value)} /></label>
         <label className="timeline-select-label"><span>Type</span><select aria-label="Filter timeline by type" value={typeFilter} onChange={event => setTypeFilter(event.target.value)}>
-          <option value="all">All activity</option><option value="task">Tasks</option><option value="event">Events</option><option value="reminder">Reminders</option><option value="alarm">Alarms</option><option value="note">Notes</option><option value="activity">Schedule changes</option>
+          <option value="all">All activity</option><option value="task">Tasks</option><option value="event">Events</option><option value="focus">Focus sessions</option><option value="reminder">Reminders</option><option value="alarm">Alarms</option><option value="note">Notes</option><option value="activity">Schedule changes</option>
         </select></label>
         <label className="timeline-select-label"><span>Status</span><select aria-label="Filter timeline by status" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}>
           <option value="all">Any status</option><option value="scheduled">Scheduled</option><option value="triggered">Triggered</option><option value="pending">Pending</option><option value="completed">Completed</option><option value="postponed">Postponed</option><option value="changed">Changed</option><option value="created">Created</option>
@@ -1998,7 +2510,7 @@ function TimelinePage({ tasks, events, notes, reminders, alarmHistory }) {
         </section>
       )}
 
-      {historyError && <div className="task-storage-error" role="alert">{historyError}</div>}
+      {(historyError || focusError) && <div className="task-storage-error" role="alert">{historyError || focusError}</div>}
       <section className="timeline-list-card surface-card">
         <div className="timeline-list-heading">
           <div><p className="eyebrow">THE DAY, IN ORDER</p><h2>{formattedDate}</h2></div>
@@ -2011,7 +2523,7 @@ function TimelinePage({ tasks, events, notes, reminders, alarmHistory }) {
         ) : (
           <div className="timeline-empty"><span className="coming-soon-icon"><Icon name="clock" size={21} /></span><strong>No matching activity</strong><span>Try another date or clear the current filters.</span></div>
         )}
-        <p className="timeline-sources">Timeline combines tasks, reminders, alarms, events, notes, and task schedule history. Focus sessions and journal entries will appear when those modules are available.</p>
+        <p className="timeline-sources">Timeline combines tasks, reminders, alarms, events, notes, focus sessions, and task schedule history.</p>
       </section>
     </>
   )
@@ -2024,6 +2536,7 @@ function TimelineEntry({ activity }) {
     reminder: 'bell',
     note: 'note',
     activity: 'arrow',
+    focus: 'clock',
   }[activity.kind] || 'spark'
   return (
     <article className={`timeline-entry timeline-entry-${activity.kind}`}>
