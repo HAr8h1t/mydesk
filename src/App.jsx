@@ -16,6 +16,7 @@ const eventCategories = [
 
 const taskPriorities = ['Low', 'Medium', 'High', 'Urgent']
 const taskStatuses = ['pending', 'postponed', 'completed']
+const reminderRepeats = ['none', 'daily', 'weekly', 'monthly']
 
 const initialNotes = [
   {
@@ -192,7 +193,94 @@ function localTimeKey(value) {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
-function timelineActivities(date, tasks, events, notes, history) {
+function localDateTimeValue(value) {
+  const date = value ? new Date(value) : new Date(Date.now() + 60 * 60 * 1000)
+  return `${dateKey(date)}T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+function legacyTaskReminder(task) {
+  const scheduledAt = new Date(task.reminderAt).toISOString()
+  return {
+    id: `legacy-${task.id}`,
+    title: task.title,
+    description: '',
+    sourceType: 'task',
+    sourceId: task.id,
+    sourceTitle: task.title,
+    scheduledAt,
+    nextAt: scheduledAt,
+    nextKind: 'schedule',
+    repeat: 'none',
+    priority: task.priority || 'Medium',
+    sound: 'system',
+    escalationMinutes: 0,
+    escalationCount: 0,
+    maxEscalations: 3,
+    status: 'active',
+    createdAt: task.createdAt || new Date().toISOString(),
+    scheduleRevisionAt: '',
+    legacyKey: `task:${task.id}`,
+  }
+}
+
+function eventStartAt(event) {
+  const date = parseDateKey(event.date)
+  const [hours, minutes] = (event.startTime || '09:00').split(':').map(Number)
+  date.setHours(hours, minutes, 0, 0)
+  return date
+}
+
+function nextEventStartAt(event, now = new Date()) {
+  let eventDate = event.date
+  let date = eventStartAt(event)
+  while (date <= now && event.repeat !== 'none') {
+    eventDate = nextRecurringDate(eventDate, event.repeat)
+    date = eventStartAt({ ...event, date: eventDate })
+  }
+  return date > now ? date : null
+}
+
+function eventContextReminderAt(event, rule) {
+  const startsAt = nextEventStartAt(event)
+  if (!startsAt) return ''
+  if (rule === 'previous-evening') {
+    const previousEvening = new Date(startsAt)
+    previousEvening.setDate(previousEvening.getDate() - 1)
+    previousEvening.setHours(19, 0, 0, 0)
+    return previousEvening.toISOString()
+  }
+  const minutesBefore = rule === 'one-hour' ? 60 : 15
+  return new Date(startsAt.getTime() - minutesBefore * 60_000).toISOString()
+}
+
+function playReminderSound(sound) {
+  if (sound === 'system' || sound === 'silent') return
+  const AudioContext = window.AudioContext || window.webkitAudioContext
+  if (!AudioContext) return
+  try {
+    const context = new AudioContext()
+    const notes = sound === 'chime' ? [784, 988, 1175] : [587, 698]
+    notes.forEach((frequency, index) => {
+      const oscillator = context.createOscillator()
+      const gain = context.createGain()
+      const startAt = context.currentTime + index * 0.16
+      oscillator.type = 'sine'
+      oscillator.frequency.value = frequency
+      gain.gain.setValueAtTime(0.0001, startAt)
+      gain.gain.exponentialRampToValueAtTime(0.12, startAt + 0.025)
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.45)
+      oscillator.connect(gain)
+      gain.connect(context.destination)
+      oscillator.start(startAt)
+      oscillator.stop(startAt + 0.46)
+    })
+    window.setTimeout(() => { void context.close() }, 1000)
+  } catch (error) {
+    console.error('Unable to play the selected reminder sound.', error)
+  }
+}
+
+function timelineActivities(date, tasks, events, notes, history, reminders) {
   const activities = []
   const completedByDate = task => task.completedAt && localDateKey(task.completedAt) <= date
 
@@ -234,18 +322,6 @@ function timelineActivities(date, tasks, events, notes, history) {
         sortTime: localTimeKey(task.completedAt),
         status: 'completed',
         detail: 'Task completed',
-        taskId: task.id,
-      })
-    }
-    if (task.reminderAt && localDateKey(task.reminderAt) === date) {
-      activities.push({
-        id: `${task.id}-reminder-${date}`,
-        kind: 'reminder',
-        title: task.title,
-        time: formatClock(task.reminderAt),
-        sortTime: localTimeKey(task.reminderAt),
-        status: completedByDate(task) ? 'completed' : 'scheduled',
-        detail: 'Task reminder',
         taskId: task.id,
       })
     }
@@ -302,6 +378,41 @@ function timelineActivities(date, tasks, events, notes, history) {
       status: entry.action.toLowerCase().includes('complet') ? 'completed' : 'changed',
       detail: [entry.action, changedDate].filter(Boolean).join(' · '),
       taskId: entry.taskId,
+    })
+  })
+
+  reminders.forEach(reminder => {
+    const completedAt = reminder.completedAt || reminder.lastCompletedAt
+    const completedOnDate = completedAt && localDateKey(completedAt) === date
+    const activityAt = completedOnDate
+      ? completedAt
+      : reminder.lastNotifiedAt && localDateKey(reminder.lastNotifiedAt) === date
+        ? reminder.lastNotifiedAt
+        : reminder.nextAt && localDateKey(reminder.nextAt) === date
+          ? reminder.nextAt
+          : reminder.scheduledAt && localDateKey(reminder.scheduledAt) === date
+            ? reminder.scheduledAt
+            : ''
+    if (!activityAt) return
+    activities.push({
+      id: `${reminder.id}-${date}`,
+      kind: 'reminder',
+      title: reminder.title,
+      time: formatClock(activityAt),
+      sortTime: localTimeKey(activityAt),
+      status: reminder.status === 'completed' || completedOnDate
+        ? 'completed'
+        : reminder.status === 'paused'
+          ? 'changed'
+          : reminder.lastNotifiedAt && localDateKey(reminder.lastNotifiedAt) === date
+            ? 'triggered'
+            : 'scheduled',
+      detail: [
+        reminder.sourceTitle ? `For ${reminder.sourceTitle}` : '',
+        reminder.repeat !== 'none' ? `Repeats ${reminder.repeat}` : '',
+        reminder.lastDeliveryKind === 'escalation' ? 'Escalated' : '',
+      ].filter(Boolean).join(' · '),
+      taskId: reminder.sourceType === 'task' ? reminder.sourceId : '',
     })
   })
 
@@ -368,15 +479,32 @@ function App() {
     tasks: readStorage('mydesk-tasks', initialTasks),
     notes: readStorage('mydesk-notes', initialNotes),
     events: readStorage('mydesk-events', []),
+    reminders: readStorage('mydesk-reminders', []),
   }))
   const [tasks, setTasks] = useState(() => storedContent.tasks.map(normalizeTask))
   const [notes, setNotes] = useState(() => storedContent.notes.map(normalizeNote))
   const [events, setEvents] = useState(storedContent.events)
+  const [reminders, setReminders] = useState(() => {
+    if (window.mydesk?.reminders) return storedContent.reminders
+    const savedLegacyImports = readStorage('mydesk-reminder-legacy-imports', [])
+    const existingLegacyKeys = new Set([
+      ...storedContent.reminders.map(reminder => reminder.legacyKey),
+      ...(Array.isArray(savedLegacyImports) ? savedLegacyImports : []),
+    ])
+    const imported = storedContent.tasks
+      .filter(task => task.reminderAt
+        && Number.isFinite(new Date(task.reminderAt).getTime())
+        && !existingLegacyKeys.has(`task:${task.id}`))
+      .map(legacyTaskReminder)
+    return [...imported, ...storedContent.reminders]
+  })
   const [activeView, setActiveView] = useState('Dashboard')
   const [taskFilter, setTaskFilter] = useState('All')
   const [taskSearch, setTaskSearch] = useState('')
   const [taskStoreReady, setTaskStoreReady] = useState(() => !window.mydesk?.tasks)
   const [taskStoreError, setTaskStoreError] = useState('')
+  const [reminderStoreReady, setReminderStoreReady] = useState(() => !window.mydesk?.reminders)
+  const [reminderStoreError, setReminderStoreError] = useState('')
   const [taskActionError, setTaskActionError] = useState('')
   const [noteSearch, setNoteSearch] = useState('')
   const [selectedNoteId, setSelectedNoteId] = useState(storedContent.notes[0]?.id ?? null)
@@ -391,8 +519,14 @@ function App() {
         setTasks(saved.tasks.map(normalizeTask))
       } else if (!saved.hasImportedLegacyTasks && storedContent.tasks.length) {
         const migratedTasks = storedContent.tasks.map(normalizeTask)
-        await taskDatabase.save(migratedTasks)
-        if (active) setTasks(migratedTasks)
+        const migratedReminders = await taskDatabase.save(migratedTasks)
+        if (active) {
+          setTasks(migratedTasks)
+          if (Array.isArray(migratedReminders)) {
+            setReminders(migratedReminders)
+            setReminderStoreReady(true)
+          }
+        }
       } else {
         setTasks([])
       }
@@ -402,6 +536,21 @@ function App() {
     })
     return () => { active = false }
   }, [storedContent.tasks])
+
+  useEffect(() => {
+    const reminderDatabase = window.mydesk?.reminders
+    if (!reminderDatabase) return undefined
+
+    let active = true
+    reminderDatabase.load().then(saved => {
+      if (!active) return
+      setReminders(saved)
+      setReminderStoreReady(true)
+    }).catch(error => {
+      if (active) setReminderStoreError(`Reminders could not be loaded from the local database: ${error.message}`)
+    })
+    return () => { active = false }
+  }, [storedContent.reminders, storedContent.tasks])
 
   useEffect(() => {
     const taskDatabase = window.mydesk?.tasks
@@ -422,6 +571,32 @@ function App() {
   useEffect(() => {
     localStorage.setItem('mydesk-events', JSON.stringify(events))
   }, [events])
+
+  useEffect(() => {
+    const reminderDatabase = window.mydesk?.reminders
+    if (reminderDatabase) {
+      if (!reminderStoreReady || !taskStoreReady) return
+      reminderDatabase.save(reminders).then(() => setReminderStoreError('')).catch(error => {
+        setReminderStoreError(`Reminders could not be saved to the local database: ${error.message}`)
+      })
+    } else {
+      localStorage.setItem('mydesk-reminders', JSON.stringify(reminders))
+    }
+  }, [reminders, reminderStoreReady, taskStoreReady])
+
+  useEffect(() => {
+    const reminderDatabase = window.mydesk?.reminders
+    if (!reminderDatabase?.onTriggered) return undefined
+    const unsubscribeTriggered = reminderDatabase.onTriggered(({ reminder }) => {
+      setReminders(current => current.map(item => item.id === reminder.id ? reminder : item))
+      playReminderSound(reminder.sound)
+    })
+    const unsubscribeError = reminderDatabase.onError?.(message => setReminderStoreError(message))
+    return () => {
+      unsubscribeTriggered()
+      unsubscribeError?.()
+    }
+  }, [])
 
   const completedTasks = tasks.filter(task => displayTaskStatus(task) === 'completed').length
   const activeTasks = tasks.length - completedTasks
@@ -499,6 +674,13 @@ function App() {
     setTasks(current => existing
       ? current.map(task => task.id === id ? { ...nextTask, history } : task)
       : [{ ...nextTask, history }, ...current])
+    if (existing && existing.title !== nextTask.title) {
+      setReminders(current => current.map(reminder => (
+        reminder.sourceType === 'task' && reminder.sourceId === id
+          ? { ...reminder, sourceTitle: nextTask.title }
+          : reminder
+      )))
+    }
     setTaskActionError('')
     return true
   }
@@ -560,6 +742,11 @@ function App() {
     setTasks(current => current
       .filter(task => task.id !== id)
       .map(task => ({ ...task, dependencies: task.dependencies.filter(dependency => dependency !== id) })))
+    setReminders(current => current.map(reminder => (
+      reminder.sourceType === 'task' && reminder.sourceId === id && reminder.status === 'active'
+        ? { ...reminder, status: 'paused', nextAt: '', nextKind: '', pausedReason: 'The linked task was deleted.', scheduleRevisionAt: new Date().toISOString() }
+        : reminder
+    )))
   }
 
   function updateTask(id, changes, action) {
@@ -610,6 +797,159 @@ function App() {
     if (selectedNoteId === id) {
       setSelectedNoteId(notes.find(note => note.id !== id)?.id ?? null)
     }
+  }
+
+  function saveReminder(draft) {
+    const source = draft.sourceType === 'task'
+      ? tasks.find(task => task.id === draft.sourceId)
+      : draft.sourceType === 'event'
+        ? events.find(event => event.id === draft.sourceId)
+        : null
+    const scheduledAt = new Date(draft.scheduledAt).toISOString()
+    const existing = reminders.find(reminder => reminder.id === draft.id)
+    const now = new Date().toISOString()
+    const reminder = {
+      ...existing,
+      ...draft,
+      id: existing?.id || draft.id || createId(),
+      scheduledAt,
+      nextAt: scheduledAt,
+      nextKind: 'schedule',
+      status: 'active',
+      sourceTitle: source?.title || '',
+      createdAt: existing?.createdAt || now,
+      scheduleRevisionAt: now,
+      lastNotifiedAt: '',
+      lastDeliveryKind: '',
+      completedAt: '',
+      snoozedUntil: '',
+      escalationCount: 0,
+      legacyKey: existing?.legacyKey || '',
+    }
+    setReminders(current => existing
+      ? current.map(item => item.id === reminder.id ? reminder : item)
+      : [reminder, ...current])
+    return true
+  }
+
+  function completeReminder(id) {
+    const reminderDatabase = window.mydesk?.reminders
+    if (reminderDatabase) {
+      reminderDatabase.complete(id).then(updated => {
+        if (updated) setReminders(current => current.map(item => item.id === id ? updated : item))
+      }).catch(error => setReminderStoreError(`Reminder could not be completed: ${error.message}`))
+      return
+    }
+    const now = new Date()
+    setReminders(current => current.map(reminder => {
+      if (reminder.id !== id || reminder.status !== 'active') return reminder
+      if (reminder.repeat === 'none') {
+        return { ...reminder, status: 'completed', completedAt: now.toISOString(), nextAt: '', nextKind: '' }
+      }
+      const next = new Date(reminder.scheduledAt)
+      do {
+        if (reminder.repeat === 'daily') next.setDate(next.getDate() + 1)
+        else if (reminder.repeat === 'weekly') next.setDate(next.getDate() + 7)
+        else if (reminder.repeat === 'monthly') {
+          const day = next.getDate()
+          next.setDate(1)
+          next.setMonth(next.getMonth() + 1)
+          next.setDate(Math.min(day, new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate()))
+        }
+      } while (next <= now)
+      return {
+        ...reminder,
+        lastCompletedAt: now.toISOString(),
+        scheduledAt: next.toISOString(),
+        nextAt: next.toISOString(),
+        nextKind: 'schedule',
+        escalationCount: 0,
+        snoozedUntil: '',
+      }
+    }))
+  }
+
+  function snoozeReminder(id, minutes) {
+    const reminderDatabase = window.mydesk?.reminders
+    if (reminderDatabase) {
+      reminderDatabase.snooze(id, minutes).then(updated => {
+        if (updated) setReminders(current => current.map(item => item.id === id ? updated : item))
+      }).catch(error => setReminderStoreError(`Reminder could not be snoozed: ${error.message}`))
+      return
+    }
+    const snoozedUntil = new Date(Date.now() + minutes * 60_000).toISOString()
+    setReminders(current => current.map(reminder => reminder.id === id
+      ? { ...reminder, snoozedUntil, nextAt: snoozedUntil, nextKind: 'snooze', escalationCount: 0 }
+      : reminder))
+  }
+
+  function deleteReminder(id) {
+    const reminderDatabase = window.mydesk?.reminders
+    if (reminderDatabase) {
+      reminderDatabase.delete(id).then(() => setReminders(current => current.filter(reminder => reminder.id !== id)))
+        .catch(error => setReminderStoreError(`Reminder could not be deleted: ${error.message}`))
+      return
+    }
+    const deletedReminder = reminders.find(reminder => reminder.id === id)
+    if (deletedReminder?.legacyKey) {
+      const savedImports = readStorage('mydesk-reminder-legacy-imports', [])
+      const imports = Array.isArray(savedImports) ? savedImports : []
+      localStorage.setItem('mydesk-reminder-legacy-imports', JSON.stringify([...new Set([...imports, deletedReminder.legacyKey])]))
+    }
+    setReminders(current => current.filter(reminder => reminder.id !== id))
+  }
+
+  function syncEventReminders(event) {
+    setReminders(current => current.map(reminder => {
+      if (reminder.sourceType !== 'event' || reminder.sourceId !== event.id) return reminder
+      const sourceUpdated = reminder.sourceTitle === event.title
+        ? reminder
+        : { ...reminder, sourceTitle: event.title }
+      if (!reminder.contextRule || !['active', 'paused'].includes(reminder.status)) return sourceUpdated
+      const scheduledAt = eventContextReminderAt(event, reminder.contextRule)
+      if (!scheduledAt || Date.parse(scheduledAt) <= Date.now()) {
+        return {
+          ...sourceUpdated,
+          scheduledAt: scheduledAt || reminder.scheduledAt,
+          nextAt: '',
+          nextKind: '',
+          status: 'paused',
+          pausedReason: 'The updated event no longer has a future reminder time.',
+          scheduleRevisionAt: new Date().toISOString(),
+        }
+      }
+      return {
+        ...sourceUpdated,
+        scheduledAt,
+        nextAt: scheduledAt,
+        nextKind: 'schedule',
+        status: 'active',
+        pausedReason: '',
+        escalationCount: 0,
+        scheduleRevisionAt: new Date().toISOString(),
+        lastNotifiedAt: '',
+        lastDeliveryKind: '',
+      }
+    }))
+  }
+
+  function saveEvent(event) {
+    setEvents(current => {
+      const exists = current.some(item => item.id === event.id)
+      return exists
+        ? current.map(item => item.id === event.id ? event : item)
+        : [event, ...current]
+    })
+    syncEventReminders(event)
+  }
+
+  function deleteEvent(id) {
+    setEvents(current => current.filter(event => event.id !== id))
+    setReminders(current => current.map(reminder => (
+      reminder.sourceType === 'event' && reminder.sourceId === id && reminder.status === 'active'
+        ? { ...reminder, status: 'paused', nextAt: '', nextKind: '', pausedReason: 'The linked event was deleted.', scheduleRevisionAt: new Date().toISOString() }
+        : reminder
+    )))
   }
 
   const [greeting] = useState(() => (
@@ -665,6 +1005,7 @@ function App() {
         </header>
         <div className="page-content">
           {taskStoreError && <div className="task-storage-error" role="alert">{taskStoreError}</div>}
+          {reminderStoreError && <div className="task-storage-error" role="alert">{reminderStoreError}</div>}
           {taskActionError && <div className="task-action-error" role="alert"><span>{taskActionError}</span><button type="button" onClick={() => setTaskActionError('')}>Dismiss</button></div>}
           {activeView === 'Dashboard' && (
             <Dashboard
@@ -702,20 +1043,28 @@ function App() {
           )}
 
           {activeView === 'Timeline' && (
-            <TimelinePage tasks={tasks} events={events} notes={notes} />
+            <TimelinePage tasks={tasks} events={events} notes={notes} reminders={reminders} />
+          )}
+
+          {activeView === 'Reminders' && (
+            <RemindersPage
+              tasks={tasks}
+              events={events}
+              reminders={reminders}
+              onSave={saveReminder}
+              onComplete={completeReminder}
+              onSnooze={snoozeReminder}
+              onDelete={deleteReminder}
+              onSetError={setReminderStoreError}
+            />
           )}
 
           {activeView === 'Calendar' && (
             <CalendarPage
               events={events}
               tasks={tasks}
-              onSaveEvent={event => setEvents(current => {
-                const exists = current.some(item => item.id === event.id)
-                return exists
-                  ? current.map(item => item.id === event.id ? event : item)
-                  : [event, ...current]
-              })}
-              onDeleteEvent={id => setEvents(current => current.filter(event => event.id !== id))}
+              onSaveEvent={saveEvent}
+              onDeleteEvent={deleteEvent}
               onMoveItem={(item, date) => {
                 if (item.type === 'task') {
                   const key = item.calendarKind === 'scheduled' ? 'startDate' : 'dueDate'
@@ -727,7 +1076,12 @@ function App() {
                   } : task))
                   if (prior) setTaskActionError('')
                 } else {
-                  setEvents(current => current.map(event => event.id === item.id ? { ...event, date } : event))
+                  const event = events.find(current => current.id === item.id)
+                  if (event) {
+                    const updatedEvent = { ...event, date }
+                    setEvents(current => current.map(item => item.id === event.id ? updatedEvent : item))
+                    syncEventReminders(updatedEvent)
+                  }
                 }
               }}
               onToggleTask={toggleTask}
@@ -747,7 +1101,7 @@ function App() {
             />
           )}
 
-          {!['Dashboard', 'Tasks', 'Timeline', 'Calendar', 'Notes'].includes(activeView) && (
+          {!['Dashboard', 'Tasks', 'Timeline', 'Calendar', 'Reminders', 'Notes'].includes(activeView) && (
             <ComingSoonPage title={activeView} />
           )}
         </div>
@@ -1041,7 +1395,6 @@ function TaskCard({ task, allTasks, onEdit, onToggle, onUpdate, onDelete }) {
             {task.goal && <span>Goal: {task.goal}</span>}
             {task.eventId && <span>Linked event: {task.eventId}</span>}
             {task.repeat !== 'none' && <span>Repeats {task.repeat}</span>}
-            {task.reminderAt && <span>Reminder {new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(task.reminderAt))}</span>}
           </div>
           {task.notes && <p className="task-notes-preview">{task.notes}</p>}
           {task.attachments.length > 0 && (
@@ -1139,7 +1492,6 @@ function TaskEditorModal({ task, allTasks, events, error, onClose, onSave }) {
           <label className="task-form-field"><span>Repeat</span><select value={draft.repeat} onChange={event => update('repeat', event.target.value)}><option value="none">Does not repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
           <label className="task-form-field"><span>Estimated minutes</span><input type="number" min="0" value={draft.estimatedMinutes} onChange={event => update('estimatedMinutes', event.target.value === '' ? '' : Number(event.target.value))} /></label>
           <label className="task-form-field"><span>Actual minutes</span><input type="number" min="0" value={draft.actualMinutes} onChange={event => update('actualMinutes', Number(event.target.value))} /></label>
-          <label className="task-form-field"><span>Reminder</span><input type="datetime-local" value={draft.reminderAt} onChange={event => update('reminderAt', event.target.value)} /></label>
           <label className="task-form-field"><span>Project</span><input maxLength={80} value={draft.project} onChange={event => update('project', event.target.value)} placeholder="Optional project" /></label>
           <label className="task-form-field"><span>Goal</span><input maxLength={80} value={draft.goal} onChange={event => update('goal', event.target.value)} placeholder="Optional goal" /></label>
           <label className="task-form-field"><span>Related event</span><select value={draft.eventId} onChange={event => update('eventId', event.target.value)}><option value="">None</option>{events.map(item => <option key={item.id} value={item.id}>{item.title} · {formatDate(parseDateKey(item.date))}</option>)}</select></label>
@@ -1210,7 +1562,7 @@ function TimelineSummary({ activities, label }) {
       <div className="timeline-summary-counts">
         <span><b>{summary.tasks}</b> tasks</span>
         <span><b>{summary.events}</b> events</span>
-        <span><b>{summary.reminders}</b> reminders</span>
+        <span><b>{summary.reminders}</b> {summary.reminders === 1 ? 'reminder' : 'reminders'}</span>
         <span><b>{summary.notes}</b> notes</span>
         <span><b>{summary.changes}</b> schedule changes</span>
       </div>
@@ -1218,7 +1570,7 @@ function TimelineSummary({ activities, label }) {
   )
 }
 
-function TimelinePage({ tasks, events, notes }) {
+function TimelinePage({ tasks, events, notes, reminders }) {
   const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date()))
   const [compareDate, setCompareDate] = useState('')
   const [search, setSearch] = useState('')
@@ -1270,6 +1622,7 @@ function TimelinePage({ tasks, events, notes }) {
     events,
     notes,
     historyByDate[selectedDate] || [],
+    reminders,
   )
   const formattedDate = new Intl.DateTimeFormat('en', {
     weekday: 'long',
@@ -1286,7 +1639,7 @@ function TimelinePage({ tasks, events, notes }) {
       .toLowerCase().includes(query)
   })
   const compareActivities = compareDate
-    ? timelineActivities(compareDate, tasks, events, notes, historyByDate[compareDate] || [])
+    ? timelineActivities(compareDate, tasks, events, notes, historyByDate[compareDate] || [], reminders)
     : []
   const selectedSummary = getTimelineSummary(currentActivities)
   const compareSummary = getTimelineSummary(compareActivities)
@@ -1325,7 +1678,7 @@ function TimelinePage({ tasks, events, notes }) {
           <option value="all">All activity</option><option value="task">Tasks</option><option value="event">Events</option><option value="reminder">Reminders</option><option value="note">Notes</option><option value="activity">Schedule changes</option>
         </select></label>
         <label className="timeline-select-label"><span>Status</span><select aria-label="Filter timeline by status" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}>
-          <option value="all">Any status</option><option value="scheduled">Scheduled</option><option value="pending">Pending</option><option value="completed">Completed</option><option value="postponed">Postponed</option><option value="changed">Changed</option><option value="created">Created</option>
+          <option value="all">Any status</option><option value="scheduled">Scheduled</option><option value="triggered">Triggered</option><option value="pending">Pending</option><option value="completed">Completed</option><option value="postponed">Postponed</option><option value="changed">Changed</option><option value="created">Created</option>
         </select></label>
         <button type="button" className="calendar-today timeline-compare-toggle" onClick={() => setCompareDate(value => value || dateKey(addDays(parseDateKey(selectedDate), -1)))}>{compareDate ? 'Comparing days' : 'Compare days'}</button>
       </section>
@@ -1352,7 +1705,7 @@ function TimelinePage({ tasks, events, notes }) {
         ) : (
           <div className="timeline-empty"><span className="coming-soon-icon"><Icon name="clock" size={21} /></span><strong>No matching activity</strong><span>Try another date or clear the current filters.</span></div>
         )}
-        <p className="timeline-sources">Timeline combines tasks, task reminders, events, notes, and task schedule history. Alarms, focus sessions, and journal entries will appear when those modules are available.</p>
+        <p className="timeline-sources">Timeline combines tasks, reminders, events, notes, and task schedule history. Alarms, focus sessions, and journal entries will appear when those modules are available.</p>
       </section>
     </>
   )
@@ -1693,6 +2046,247 @@ function NotesPage({ notes, selectedNote, noteSearch, setNoteSearch, setSelected
         </article>
       </section>
     </>
+  )
+}
+
+function RemindersPage({ tasks, events, reminders, onSave, onComplete, onSnooze, onDelete }) {
+  const [formOpen, setFormOpen] = useState(false)
+  const [editingReminder, setEditingReminder] = useState(null)
+  const [eventId, setEventId] = useState('')
+  const [filter, setFilter] = useState('Upcoming')
+  const [contextMessage, setContextMessage] = useState('')
+
+  const filteredReminders = reminders.filter(reminder => (
+    filter === 'All'
+      || (filter === 'Upcoming' && reminder.status !== 'completed')
+      || (filter === 'Completed' && reminder.status === 'completed')
+  )).sort((left, right) => (
+    (Date.parse(left.nextAt || left.scheduledAt) || Infinity)
+    - (Date.parse(right.nextAt || right.scheduledAt) || Infinity)
+  ))
+
+  function openForm(reminder = null) {
+    setEditingReminder(reminder)
+    setFormOpen(true)
+  }
+
+  function addContextualSet() {
+    const event = events.find(item => item.id === eventId)
+    if (!event) {
+      setContextMessage('Choose an event before creating preparation reminders.')
+      return
+    }
+    const rules = [
+      { key: 'previous-evening', label: 'Previous evening prep' },
+      { key: 'one-hour', label: 'Event in one hour' },
+      { key: 'fifteen-minutes', label: 'Event in fifteen minutes' },
+    ]
+    const created = rules.map(rule => {
+      const scheduledAt = eventContextReminderAt(event, rule.key)
+      if (!scheduledAt || Date.parse(scheduledAt) <= Date.now()) return null
+      return {
+        id: createId(),
+        title: `${event.title} · ${rule.label}`,
+        description: `Upcoming event: ${event.title}`,
+        sourceType: 'event',
+        sourceId: event.id,
+        sourceTitle: event.title,
+        scheduledAt,
+        nextAt: scheduledAt,
+        nextKind: 'schedule',
+        repeat: 'none',
+        priority: 'High',
+        sound: 'system',
+        escalationMinutes: 0,
+        escalationCount: 0,
+        maxEscalations: 3,
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        scheduleRevisionAt: new Date().toISOString(),
+        contextRule: rule.key,
+      }
+    }).filter(Boolean)
+
+    if (!created.length) {
+      setContextMessage('This event has no preparation reminders left in the future.')
+      return
+    }
+    created.forEach(onSave)
+    setContextMessage(`${created.length} contextual reminder${created.length === 1 ? '' : 's'} added for ${event.title}.`)
+  }
+
+  function sourceName(reminder) {
+    if (reminder.sourceType === 'task') {
+      return tasks.find(task => task.id === reminder.sourceId)?.title || reminder.sourceTitle || 'Task no longer available'
+    }
+    if (reminder.sourceType === 'event') {
+      return events.find(event => event.id === reminder.sourceId)?.title || reminder.sourceTitle || 'Event no longer available'
+    }
+    return ''
+  }
+
+  return (
+    <>
+      <section className="page-title-row reminders-title-row">
+        <div><p className="eyebrow">KEEP THE IMPORTANT THINGS CLOSE</p><h1>Smart reminders<span>.</span></h1><p className="welcome-subtitle">A gentle nudge, connected to the things already on your schedule.</p></div>
+        <button type="button" className="primary-button" onClick={() => openForm()}><Icon name="plus" size={16} /> New reminder</button>
+      </section>
+
+      <section className="surface-card contextual-reminder-card">
+        <div>
+          <p className="eyebrow">CONTEXTUAL PREPARATION</p>
+          <h2>Get ready for an event.</h2>
+          <p>Add a reminder the evening before, one hour before, and fifteen minutes before an event.</p>
+        </div>
+        <div className="contextual-reminder-actions">
+          <label className="task-form-field"><span>Choose an event</span><select aria-label="Event for contextual reminders" value={eventId} onChange={event => { setEventId(event.target.value); setContextMessage('') }}><option value="">Select an event</option>{events.map(event => <option key={event.id} value={event.id}>{event.title} · {formatDate(parseDateKey(event.date))}</option>)}</select></label>
+          <button type="button" className="calendar-today" onClick={addContextualSet} disabled={!eventId}>Create preparation set</button>
+        </div>
+        {contextMessage && <p className="contextual-reminder-message" role="status">{contextMessage}</p>}
+      </section>
+
+      <section className="surface-card reminder-list-card">
+        <div className="reminder-list-heading">
+          <div><h2>Your reminders</h2><span>{filteredReminders.length} {filteredReminders.length === 1 ? 'reminder' : 'reminders'}</span></div>
+          <div className="filter-tabs" role="group" aria-label="Filter reminders">
+            {['Upcoming', 'All', 'Completed'].map(option => <button type="button" key={option} className={filter === option ? 'filter-active' : ''} onClick={() => setFilter(option)}>{option}</button>)}
+          </div>
+        </div>
+        {filteredReminders.length ? (
+          <div className="reminder-list">
+            {filteredReminders.map(reminder => {
+              const when = reminder.status === 'active'
+                ? reminder.nextAt
+                : reminder.completedAt || reminder.scheduledAt
+              const linkedSource = sourceName(reminder)
+              return (
+                <article className={`reminder-card reminder-card-${reminder.status}`} key={reminder.id}>
+                  <div className="reminder-card-content">
+                    <span className={`reminder-priority reminder-priority-${(reminder.priority || 'Medium').toLowerCase()}`}>{reminder.priority || 'Medium'}</span>
+                    <div className="reminder-card-copy">
+                      <div className="reminder-card-title"><strong>{reminder.title}</strong><span className={`reminder-status reminder-status-${reminder.status}`}>{reminder.status}</span></div>
+                      <p>{when ? new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(when)) : 'No further alerts scheduled'}</p>
+                      {linkedSource && <span className="reminder-linked-source">Linked {reminder.sourceType}: {linkedSource}</span>}
+                      {reminder.repeat !== 'none' && <span className="reminder-linked-source">Repeats {reminder.repeat}</span>}
+                      {reminder.escalationMinutes > 0 && <span className="reminder-linked-source">Escalates every {reminder.escalationMinutes} min · up to {reminder.maxEscalations} times</span>}
+                      {reminder.pausedReason && <span className="reminder-paused-reason">{reminder.pausedReason}</span>}
+                      {reminder.description && <span className="reminder-linked-source">{reminder.description}</span>}
+                    </div>
+                  </div>
+                  <div className="reminder-card-actions">
+                    {reminder.status === 'active' && <>
+                      <button type="button" className="calendar-today" onClick={() => onSnooze(reminder.id, 10)}>Snooze 10 min</button>
+                      <button type="button" className="calendar-today" onClick={() => onSnooze(reminder.id, 60)}>Snooze 1 hour</button>
+                      <button type="button" className="calendar-today" onClick={() => onComplete(reminder.id)}>{reminder.repeat === 'none' ? 'Mark complete' : 'Done for now'}</button>
+                    </>}
+                    <button type="button" className="icon-button" aria-label={`Edit ${reminder.title}`} onClick={() => openForm(reminder)}><Icon name="edit" size={16} /></button>
+                    <button type="button" className="row-delete" aria-label={`Delete ${reminder.title}`} onClick={() => onDelete(reminder.id)}><Icon name="trash" size={16} /></button>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="empty-state"><span className="empty-state-icon"><Icon name="bell" size={22} /></span><h3>No reminders here</h3><p>Create a reminder or connect one to an existing task or event.</p><button type="button" className="primary-button" onClick={() => openForm()}><Icon name="plus" size={16} /> New reminder</button></div>
+        )}
+      </section>
+
+      {formOpen && <ReminderEditor
+        reminder={editingReminder}
+        tasks={tasks}
+        events={events}
+        onClose={() => setFormOpen(false)}
+        onSave={draft => {
+          if (onSave(draft)) setFormOpen(false)
+        }}
+      />}
+    </>
+  )
+}
+
+function ReminderEditor({ reminder, tasks, events, onClose, onSave }) {
+  const [draft, setDraft] = useState(() => ({
+    id: reminder?.id,
+    title: reminder?.title || '',
+    description: reminder?.description || '',
+    sourceType: reminder?.sourceType || 'none',
+    sourceId: reminder?.sourceId || '',
+    scheduledAt: localDateTimeValue(
+      reminder?.nextAt || (Date.parse(reminder?.scheduledAt) > Date.now() ? reminder.scheduledAt : ''),
+    ),
+    repeat: reminder?.repeat || 'none',
+    priority: reminder?.priority || 'Medium',
+    sound: reminder?.sound || 'system',
+    escalationMinutes: reminder?.escalationMinutes || 0,
+    maxEscalations: reminder?.maxEscalations || 3,
+    legacyKey: reminder?.legacyKey || '',
+  }))
+  const [error, setError] = useState('')
+  const sourceValue = draft.sourceType === 'none' ? '' : `${draft.sourceType}:${draft.sourceId}`
+
+  function update(field, value) {
+    setDraft(current => ({ ...current, [field]: value }))
+  }
+
+  function submit(event) {
+    event.preventDefault()
+    const scheduledAt = new Date(draft.scheduledAt)
+    if (!draft.title.trim()) {
+      setError('Enter a title for this reminder.')
+      return
+    }
+    if (!Number.isFinite(scheduledAt.getTime())) {
+      setError('Choose a valid date and time.')
+      return
+    }
+    if (scheduledAt.getTime() <= Date.now()) {
+      setError('Choose a date and time in the future.')
+      return
+    }
+    if (draft.repeat !== 'none' && Number(draft.escalationMinutes)) {
+      setError('Escalation is available for one-time reminders. Choose no repeat or turn escalation off.')
+      return
+    }
+    const [sourceType = 'none', sourceId = ''] = (sourceValue || 'none:').split(':')
+    onSave({
+      ...draft,
+      id: draft.id || createId(),
+      title: draft.title.trim(),
+      description: draft.description.trim(),
+      sourceType,
+      sourceId,
+      scheduledAt: scheduledAt.toISOString(),
+      escalationMinutes: Number(draft.escalationMinutes),
+      contextRule: '',
+    })
+  }
+
+  return (
+    <div className="task-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+      <form className="task-editor-modal reminder-editor-modal" onSubmit={submit}>
+        <div className="task-editor-heading">
+          <div><p className="eyebrow">REMINDER DETAILS</p><h2>{reminder ? 'Edit reminder' : 'Create a reminder'}</h2></div>
+          <button type="button" className="icon-button" aria-label="Close reminder form" onClick={onClose}>×</button>
+        </div>
+        <div className="task-form-grid">
+          <label className="task-form-field task-form-title"><span>Reminder title</span><input autoFocus required maxLength={180} value={draft.title} onChange={event => update('title', event.target.value)} placeholder="What should you remember?" /></label>
+          <label className="task-form-field"><span>Date and time</span><input required type="datetime-local" value={draft.scheduledAt} onChange={event => update('scheduledAt', event.target.value)} /></label>
+          <label className="task-form-field"><span>Link to task or event</span><select value={sourceValue} onChange={event => {
+            const [sourceType = 'none', sourceId = ''] = (event.target.value || 'none:').split(':')
+            const source = sourceType === 'task' ? tasks.find(item => item.id === sourceId) : events.find(item => item.id === sourceId)
+            setDraft(current => ({ ...current, sourceType, sourceId, title: current.title || source?.title || '' }))
+          }}><option value="">Not linked</option><optgroup label="Tasks">{tasks.map(task => <option key={task.id} value={`task:${task.id}`}>{task.title}</option>)}</optgroup><optgroup label="Events">{events.map(event => <option key={event.id} value={`event:${event.id}`}>{event.title} · {formatDate(parseDateKey(event.date))}</option>)}</optgroup></select></label>
+          <label className="task-form-field"><span>Repeat</span><select value={draft.repeat} onChange={event => update('repeat', event.target.value)}>{reminderRepeats.map(repeat => <option key={repeat} value={repeat}>{repeat === 'none' ? 'One time' : repeat[0].toUpperCase() + repeat.slice(1)}</option>)}</select></label>
+          <label className="task-form-field"><span>Priority</span><select value={draft.priority} onChange={event => update('priority', event.target.value)}>{taskPriorities.map(priority => <option key={priority}>{priority}</option>)}</select></label>
+          <label className="task-form-field"><span>Notification sound</span><select value={draft.sound} onChange={event => update('sound', event.target.value)}><option value="system">System default</option><option value="gentle">Gentle tone</option><option value="chime">Chime</option><option value="silent">Silent</option></select></label>
+          <label className="task-form-field"><span>Escalate if incomplete</span><select value={draft.escalationMinutes} disabled={draft.repeat !== 'none'} onChange={event => update('escalationMinutes', Number(event.target.value))}><option value={0}>No escalation</option><option value={15}>Every 15 minutes</option><option value={30}>Every 30 minutes</option><option value={60}>Every hour</option></select></label>
+          <label className="task-form-field"><span>Reminder note</span><input maxLength={240} value={draft.description} onChange={event => update('description', event.target.value)} placeholder="Optional detail" /></label>
+        </div>
+        <p className="reminder-editor-hint">Snooze or complete this reminder from your reminder list. One-time reminders can escalate up to three times.</p>
+        {error && <p className="task-form-error" role="alert">{error}</p>}
+        <div className="task-editor-actions"><button type="button" className="calendar-today" onClick={onClose}>Cancel</button><button type="submit" className="primary-button">{reminder ? 'Save changes' : 'Create reminder'}</button></div>
+      </form>
+    </div>
   )
 }
 

@@ -358,6 +358,14 @@ The Daily Timeline brings together tasks, reminders, events, notes, and task
 schedule history for a selected date. Task history is indexed by activity date
 in SQLite for date-based timeline queries.
 
+Reminders are stored in the same SQLite database and linked to existing task
+or event IDs. The Electron main process schedules one-time and recurring
+reminders, sends desktop notifications, and supports snooze, completion,
+priority, notification sounds, and configurable escalation intervals.
+Contextual event reminders can be created for the previous evening, one hour
+before, and fifteen minutes before an event. The scheduler runs while MyDesk is
+open; Android location-based reminders are not implemented.
+
 Tasks support dates, priorities, categories, tags, checklists, recurrence,
 dependencies, estimates, time spent, notes, attachments, status, and history.
 Smart scheduling suggests a task that fits a free hour tomorrow. The calendar
