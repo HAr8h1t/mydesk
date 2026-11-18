@@ -249,6 +249,7 @@ npm run build
 npm run dist
 ```
 
+<<<<<<< HEAD
 The installer/build output is configured to go into the `release/`
 directory. Packaging should be tested as the project evolves, especially
 after native Node.js modules such as `better-sqlite3` are introduced.
@@ -347,3 +348,15 @@ without explaining the problem it solves.
 ## License
 
 The project license will be documented here once it has been finalized.
+=======
+Desktop tasks are stored in SQLite and managed through Electron IPC. Task
+subtasks, dependencies, attachments, and activity history are stored with the
+task record. Notes and calendar events use local storage. Calendar task entries
+are derived from task dates, so rescheduling a task updates its calendar entry.
+
+Tasks support dates, priorities, categories, tags, checklists, recurrence,
+dependencies, estimates, time spent, notes, attachments, status, and history.
+Smart scheduling suggests a task that fits a free hour tomorrow. The calendar
+includes month, week, day, and agenda views, recurring events, event categories,
+and drag-and-drop rescheduling.
+>>>>>>> ee9f33d (Added Core Productivity System & Task managment system)

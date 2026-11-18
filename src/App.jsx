@@ -7,6 +7,16 @@ const initialTasks = [
   { id: 'task-3', title: 'Set up your MyDesk workspace', done: true },
 ]
 
+const eventCategories = [
+  { name: 'Personal', color: '#d98262' },
+  { name: 'Work', color: '#6f8fc2' },
+  { name: 'Health', color: '#70a486' },
+  { name: 'Other', color: '#9a82b8' },
+]
+
+const taskPriorities = ['Low', 'Medium', 'High', 'Urgent']
+const taskStatuses = ['pending', 'postponed', 'completed']
+
 const initialNotes = [
   {
     id: 'note-1',
@@ -84,59 +94,352 @@ function formatDate(value) {
   }).format(new Date(value))
 }
 
+function dateKey(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function parseDateKey(value) {
+  const [year, month, day] = value.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
+function addDays(date, amount) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + amount)
+  return next
+}
+
+function startOfWeek(date) {
+  const start = new Date(date)
+  start.setDate(start.getDate() - start.getDay())
+  start.setHours(0, 0, 0, 0)
+  return start
+}
+
+function formatTime(value) {
+  if (!value) return ''
+  const [hours, minutes] = value.split(':').map(Number)
+  return new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' })
+    .format(new Date(2000, 0, 1, hours, minutes))
+}
+
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+}
+
+function normalizeTask(task) {
+  const createdAt = task.createdAt || new Date().toISOString()
+  const status = task.status || (task.done ? 'completed' : 'pending')
+  return {
+    ...task,
+    status,
+    done: status === 'completed',
+    startDate: task.startDate || '',
+    startTime: task.startTime || '',
+    dueDate: task.dueDate || '',
+    originalDueDate: task.originalDueDate ?? task.dueDate ?? '',
+    priority: task.priority || 'Medium',
+    category: task.category || 'Personal',
+    tags: Array.isArray(task.tags) ? task.tags : [],
+    subtasks: Array.isArray(task.subtasks) ? task.subtasks : [],
+    dependencies: Array.isArray(task.dependencies) ? task.dependencies : [],
+    repeat: task.repeat || 'none',
+    estimatedMinutes: task.estimatedMinutes ?? '',
+    actualMinutes: task.actualMinutes ?? 0,
+    project: task.project || '',
+    goal: task.goal || '',
+    eventId: task.eventId || '',
+    reminderAt: task.reminderAt || '',
+    notes: task.notes || '',
+    attachments: Array.isArray(task.attachments) ? task.attachments : [],
+    history: Array.isArray(task.history) ? task.history : [{
+      id: createId(),
+      at: createdAt,
+      action: 'Task created',
+      fromDate: '',
+      toDate: task.dueDate || '',
+    }],
+    createdAt,
+    completedAt: task.completedAt || '',
+  }
+}
+
+function displayTaskStatus(task, today = dateKey(new Date())) {
+  if (task.status === 'completed' || task.done) return 'completed'
+  if (task.status === 'postponed') return 'postponed'
+  if (task.dueDate && task.dueDate < today) return 'overdue'
+  return 'pending'
+}
+
+function addTaskHistory(task, action, fromDate = '', toDate = '') {
+  return [...task.history, {
+    id: createId(),
+    at: new Date().toISOString(),
+    action,
+    fromDate,
+    toDate,
+  }]
+}
+
+function nextRecurringDate(value, repeat) {
+  if (!value) return ''
+  const date = parseDateKey(value)
+  if (repeat === 'daily') date.setDate(date.getDate() + 1)
+  else if (repeat === 'weekly') date.setDate(date.getDate() + 7)
+  else if (repeat === 'monthly') {
+    const originalDay = date.getDate()
+    date.setDate(1)
+    date.setMonth(date.getMonth() + 1)
+    const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()
+    date.setDate(Math.min(originalDay, daysInMonth))
+  }
+  return dateKey(date)
+}
+
+function eventOccursOnDate(event, key) {
+  if (event.repeat === 'daily') return key >= event.date
+  if (event.repeat === 'weekly') {
+    return key >= event.date && parseDateKey(key).getDay() === parseDateKey(event.date).getDay()
+  }
+  if (event.repeat === 'monthly') {
+    return key >= event.date && parseDateKey(key).getDate() === parseDateKey(event.date).getDate()
+  }
+  return event.date === key
+}
+
+function timeToMinutes(value) {
+  if (!value) return 0
+  const [hours, minutes] = value.split(':').map(Number)
+  return hours * 60 + minutes
+}
+
+function minutesToTime(value) {
+  const hours = Math.floor(value / 60) % 24
+  const minutes = value % 60
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
 }
 
 function App() {
   const [storedContent] = useState(() => ({
     tasks: readStorage('mydesk-tasks', initialTasks),
     notes: readStorage('mydesk-notes', initialNotes),
+    events: readStorage('mydesk-events', []),
   }))
-  const [tasks, setTasks] = useState(storedContent.tasks)
+  const [tasks, setTasks] = useState(() => storedContent.tasks.map(normalizeTask))
   const [notes, setNotes] = useState(storedContent.notes)
+  const [events, setEvents] = useState(storedContent.events)
   const [activeView, setActiveView] = useState('Dashboard')
   const [taskFilter, setTaskFilter] = useState('All')
-  const [taskDraft, setTaskDraft] = useState('')
+  const [taskSearch, setTaskSearch] = useState('')
+  const [taskStoreReady, setTaskStoreReady] = useState(() => !window.mydesk?.tasks)
+  const [taskStoreError, setTaskStoreError] = useState('')
+  const [taskActionError, setTaskActionError] = useState('')
   const [noteSearch, setNoteSearch] = useState('')
   const [selectedNoteId, setSelectedNoteId] = useState(storedContent.notes[0]?.id ?? null)
 
   useEffect(() => {
-    localStorage.setItem('mydesk-tasks', JSON.stringify(tasks))
-  }, [tasks])
+    const taskDatabase = window.mydesk?.tasks
+    if (!taskDatabase) return undefined
+    let active = true
+    taskDatabase.load().then(async saved => {
+      if (!active) return
+      if (saved.tasks.length) {
+        setTasks(saved.tasks.map(normalizeTask))
+      } else if (!saved.hasImportedLegacyTasks && storedContent.tasks.length) {
+        const migratedTasks = storedContent.tasks.map(normalizeTask)
+        await taskDatabase.save(migratedTasks)
+        if (active) setTasks(migratedTasks)
+      } else {
+        setTasks([])
+      }
+      if (active) setTaskStoreReady(true)
+    }).catch(error => {
+      if (active) setTaskStoreError(`Tasks could not be loaded from the local database: ${error.message}`)
+    })
+    return () => { active = false }
+  }, [storedContent.tasks])
+
+  useEffect(() => {
+    const taskDatabase = window.mydesk?.tasks
+    if (taskDatabase) {
+      if (!taskStoreReady) return
+      taskDatabase.save(tasks).then(() => setTaskStoreError('')).catch(error => {
+        setTaskStoreError(`Tasks could not be saved to the local database: ${error.message}`)
+      })
+    } else {
+      localStorage.setItem('mydesk-tasks', JSON.stringify(tasks))
+    }
+  }, [tasks, taskStoreReady])
 
   useEffect(() => {
     localStorage.setItem('mydesk-notes', JSON.stringify(notes))
   }, [notes])
 
-  const completedTasks = tasks.filter(task => task.done).length
+  useEffect(() => {
+    localStorage.setItem('mydesk-events', JSON.stringify(events))
+  }, [events])
+
+  const completedTasks = tasks.filter(task => displayTaskStatus(task) === 'completed').length
   const activeTasks = tasks.length - completedTasks
   const selectedNote = notes.find(note => note.id === selectedNoteId)
   const filteredTasks = useMemo(() => tasks.filter(task => {
-    if (taskFilter === 'Active') return !task.done
-    if (taskFilter === 'Completed') return task.done
-    return true
-  }), [taskFilter, tasks])
+    const status = displayTaskStatus(task)
+    if (taskFilter !== 'All' && status !== taskFilter.toLowerCase()) return false
+    if (!taskSearch.trim()) return true
+    const query = taskSearch.toLowerCase()
+    return `${task.title} ${task.category} ${task.project} ${task.goal} ${task.tags.join(' ')}`
+      .toLowerCase().includes(query)
+  }), [taskFilter, taskSearch, tasks])
   const filteredNotes = useMemo(() => notes.filter(note => (
     `${note.title} ${note.body}`.toLowerCase().includes(noteSearch.toLowerCase())
   )), [noteSearch, notes])
 
-  function addTask(event) {
-    event.preventDefault()
-    const title = taskDraft.trim()
-    if (!title) return
-    setTasks(current => [{ id: createId(), title, done: false }, ...current])
-    setTaskDraft('')
+  function hasDependencyCycle(taskId, dependencies) {
+    const tasksById = new Map(tasks.map(task => [task.id, task]))
+    const visited = new Set()
+    function reachesTask(id) {
+      if (id === taskId) return true
+      if (visited.has(id)) return false
+      visited.add(id)
+      return (tasksById.get(id)?.dependencies || []).some(reachesTask)
+    }
+    return dependencies.some(reachesTask)
+  }
+
+  function saveTask(draft) {
+    const id = draft.id || createId()
+    const dependencies = draft.dependencies.filter(dependency => dependency !== id)
+    if (hasDependencyCycle(id, dependencies)) {
+      setTaskActionError('That dependency would create a task cycle. Choose a different dependency.')
+      return false
+    }
+    if (draft.status === 'completed') {
+      const blockingDependency = tasks.find(task => dependencies.includes(task.id) && displayTaskStatus(task) !== 'completed')
+      if (blockingDependency) {
+        setTaskActionError(`Complete “${blockingDependency.title}” before completing this task.`)
+        return false
+      }
+      if (draft.subtasks.some(subtask => !subtask.done)) {
+        setTaskActionError('Finish or remove the remaining subtasks before completing this task.')
+        return false
+      }
+    }
+    const existing = tasks.find(task => task.id === id)
+    const nextTask = normalizeTask({
+      ...existing,
+      ...draft,
+      id,
+      dependencies,
+      status: draft.status || existing?.status || 'pending',
+      done: (draft.status || existing?.status) === 'completed',
+      originalDueDate: existing
+        ? (existing.originalDueDate || existing.dueDate || draft.dueDate || '')
+        : (draft.dueDate || ''),
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      completedAt: (draft.status || existing?.status) === 'completed'
+        ? (existing?.completedAt || new Date().toISOString())
+        : '',
+      history: existing?.history || [],
+    })
+    let history = nextTask.history
+    if (existing && existing.dueDate !== nextTask.dueDate) {
+      history = addTaskHistory({ ...nextTask, history }, 'Due date changed', existing.dueDate, nextTask.dueDate)
+    }
+    if (existing && existing.startDate !== nextTask.startDate) {
+      history = addTaskHistory({ ...nextTask, history }, 'Start date changed', existing.startDate, nextTask.startDate)
+    }
+    if (existing && existing.status !== nextTask.status) {
+      history = addTaskHistory({ ...nextTask, history }, `Status changed to ${nextTask.status}`)
+    }
+    if (!existing) history = addTaskHistory({ ...nextTask, history: [] }, 'Task created', '', nextTask.dueDate)
+    setTasks(current => existing
+      ? current.map(task => task.id === id ? { ...nextTask, history } : task)
+      : [{ ...nextTask, history }, ...current])
+    setTaskActionError('')
+    return true
   }
 
   function toggleTask(id) {
-    setTasks(current => current.map(task => (
-      task.id === id ? { ...task, done: !task.done } : task
-    )))
+    const task = tasks.find(item => item.id === id)
+    if (!task) return
+    if (displayTaskStatus(task) !== 'completed') {
+      const blockingDependency = tasks.find(item => task.dependencies.includes(item.id) && displayTaskStatus(item) !== 'completed')
+      if (blockingDependency) {
+        setTaskActionError(`Complete “${blockingDependency.title}” before completing this task.`)
+        return
+      }
+      if (task.subtasks.some(subtask => !subtask.done)) {
+        setTaskActionError('Finish or remove the remaining subtasks before completing this task.')
+        return
+      }
+    }
+    setTasks(current => current.flatMap(item => {
+      if (item.id !== id) return [item]
+      const completing = displayTaskStatus(item) !== 'completed'
+      const updated = {
+        ...item,
+        status: completing ? 'completed' : 'pending',
+        done: completing,
+        completedAt: completing ? new Date().toISOString() : '',
+        history: addTaskHistory(item, completing ? 'Task completed' : 'Task reopened'),
+      }
+      if (!completing || item.repeat === 'none') return [updated]
+      const nextDueDate = nextRecurringDate(item.dueDate, item.repeat)
+      const nextStartDate = nextRecurringDate(item.startDate, item.repeat)
+      return [updated, normalizeTask({
+        ...item,
+        id: createId(),
+        status: 'pending',
+        done: false,
+        dueDate: nextDueDate,
+        originalDueDate: nextDueDate,
+        startDate: nextStartDate,
+        completedAt: '',
+        actualMinutes: 0,
+        subtasks: item.subtasks.map(subtask => ({ ...subtask, id: createId(), done: false })),
+        dependencies: [],
+        attachments: [],
+        createdAt: new Date().toISOString(),
+        history: [{
+          id: createId(),
+          at: new Date().toISOString(),
+          action: 'Recurring task created',
+          fromDate: '',
+          toDate: nextDueDate,
+        }],
+      })]
+    }))
+    setTaskActionError('')
   }
 
   function deleteTask(id) {
-    setTasks(current => current.filter(task => task.id !== id))
+    setTasks(current => current
+      .filter(task => task.id !== id)
+      .map(task => ({ ...task, dependencies: task.dependencies.filter(dependency => dependency !== id) })))
+  }
+
+  function updateTask(id, changes, action) {
+    setTasks(current => current.map(task => task.id === id ? {
+      ...task,
+      ...changes,
+      history: action ? addTaskHistory(task, action) : task.history,
+    } : task))
+  }
+
+  function scheduleTask(id, date, startTime) {
+    const task = tasks.find(item => item.id === id)
+    if (!task) return
+    const previousDate = task.startDate
+    setTasks(current => current.map(item => item.id === id ? {
+      ...item,
+      startDate: date,
+      startTime,
+      history: addTaskHistory(item, 'Task smart-scheduled', previousDate, date),
+    } : item))
+    setTaskActionError('')
   }
 
   function createNote() {
@@ -217,8 +520,9 @@ function App() {
             <div className="top-avatar">H</div>
           </div>
         </header>
-
         <div className="page-content">
+          {taskStoreError && <div className="task-storage-error" role="alert">{taskStoreError}</div>}
+          {taskActionError && <div className="task-action-error" role="alert"><span>{taskActionError}</span><button type="button" onClick={() => setTaskActionError('')}>Dismiss</button></div>}
           {activeView === 'Dashboard' && (
             <Dashboard
               greeting={greeting}
@@ -239,13 +543,47 @@ function App() {
           {activeView === 'Tasks' && (
             <TasksPage
               tasks={filteredTasks}
+              allTasks={tasks}
+              events={events}
               taskFilter={taskFilter}
-              taskDraft={taskDraft}
+              taskSearch={taskSearch}
+              taskActionError={taskActionError}
               setTaskFilter={setTaskFilter}
-              setTaskDraft={setTaskDraft}
-              onAddTask={addTask}
+              setTaskSearch={setTaskSearch}
+              onSaveTask={saveTask}
+              onUpdateTask={updateTask}
               onToggleTask={toggleTask}
               onDeleteTask={deleteTask}
+              onScheduleTask={scheduleTask}
+            />
+          )}
+
+          {activeView === 'Calendar' && (
+            <CalendarPage
+              events={events}
+              tasks={tasks}
+              onSaveEvent={event => setEvents(current => {
+                const exists = current.some(item => item.id === event.id)
+                return exists
+                  ? current.map(item => item.id === event.id ? event : item)
+                  : [event, ...current]
+              })}
+              onDeleteEvent={id => setEvents(current => current.filter(event => event.id !== id))}
+              onMoveItem={(item, date) => {
+                if (item.type === 'task') {
+                  const key = item.calendarKind === 'scheduled' ? 'startDate' : 'dueDate'
+                  const prior = tasks.find(task => task.id === item.id)
+                  setTasks(current => current.map(task => task.id === item.id ? {
+                    ...task,
+                    [key]: date,
+                    history: addTaskHistory(task, key === 'startDate' ? 'Scheduled date changed' : 'Due date changed', task[key], date),
+                  } : task))
+                  if (prior) setTaskActionError('')
+                } else {
+                  setEvents(current => current.map(event => event.id === item.id ? { ...event, date } : event))
+                }
+              }}
+              onToggleTask={toggleTask}
             />
           )}
 
@@ -262,7 +600,7 @@ function App() {
             />
           )}
 
-          {!['Dashboard', 'Tasks', 'Notes'].includes(activeView) && (
+          {!['Dashboard', 'Tasks', 'Calendar', 'Notes'].includes(activeView) && (
             <ComingSoonPage title={activeView} />
           )}
         </div>
@@ -381,41 +719,598 @@ function TaskRow({ task, onToggle, onDelete }) {
         {task.done && <Icon name="check" size={14} />}
       </button>
       <span className="task-title">{task.title}</span>
+      {task.dueDate && <span className="task-due-date">{formatDate(parseDateKey(task.dueDate))}</span>}
       {onDelete && <button type="button" className="row-delete" aria-label={`Delete ${task.title}`} onClick={() => onDelete(task.id)}><Icon name="trash" size={16} /></button>}
     </div>
   )
 }
 
-function TasksPage({ tasks, taskFilter, taskDraft, setTaskFilter, setTaskDraft, onAddTask, onToggleTask, onDeleteTask }) {
+function getSmartSuggestion(tasks, events) {
+  const tomorrow = dateKey(addDays(parseDateKey(dateKey(new Date())), 1))
+  const priorityRank = { Urgent: 4, High: 3, Medium: 2, Low: 1 }
+  const candidates = tasks.filter(task => (
+    displayTaskStatus(task) === 'pending'
+    && !task.startDate
+    && (!task.dueDate || task.dueDate >= tomorrow)
+    && Number(task.estimatedMinutes || 60) <= 60
+    && task.dependencies.every(id => tasks.some(dep => dep.id === id && displayTaskStatus(dep) === 'completed'))
+  )).sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority])
+  if (!candidates.length) return null
+
+  const busySlots = [
+    ...events.filter(event => eventOccursOnDate(event, tomorrow)).map(event => ({
+      start: timeToMinutes(event.startTime),
+      end: timeToMinutes(event.endTime),
+    })),
+    ...tasks.filter(task => task.startDate === tomorrow && task.startTime).map(task => ({
+      start: timeToMinutes(task.startTime),
+      end: timeToMinutes(task.startTime) + Number(task.estimatedMinutes || 60),
+    })),
+  ]
+  for (let start = 9 * 60; start + 60 <= 17 * 60; start += 30) {
+    if (!busySlots.some(slot => start < slot.end && slot.start < start + 60)) {
+      return { task: candidates[0], date: tomorrow, startTime: minutesToTime(start) }
+    }
+  }
+  return null
+}
+
+function TasksPage({ tasks, allTasks, events, taskFilter, taskSearch, taskActionError, setTaskFilter, setTaskSearch, onSaveTask, onUpdateTask, onToggleTask, onDeleteTask, onScheduleTask }) {
+  const [formOpen, setFormOpen] = useState(false)
+  const [editingTask, setEditingTask] = useState(null)
+  const [suggestion, setSuggestion] = useState(null)
+
+  function openTaskForm(task = null) {
+    setEditingTask(task)
+    setFormOpen(true)
+  }
+
+  function submitTask(task) {
+    if (onSaveTask(task)) setFormOpen(false)
+  }
+
+  function showSuggestion() {
+    setSuggestion(getSmartSuggestion(allTasks, events))
+  }
+
   return (
     <>
-      <section className="page-title-row">
+      <section className="page-title-row tasks-title-row">
         <div><p className="eyebrow">MAKE IT HAPPEN</p><h1>Your tasks<span>.</span></h1><p className="welcome-subtitle">Small steps make big things feel possible.</p></div>
-        <div className="title-icon title-icon-peach"><Icon name="check" size={25} /></div>
+        <button type="button" className="primary-button" onClick={() => openTaskForm()}><Icon name="plus" size={16} /> New task</button>
       </section>
-      <form className="task-entry" onSubmit={onAddTask}>
-        <span className="entry-plus"><Icon name="plus" size={19} /></span>
-        <input aria-label="New task" placeholder="What would you like to get done?" value={taskDraft} onChange={event => setTaskDraft(event.target.value)} />
-        <button type="submit" className="primary-button">Add task</button>
+
+      <section className="smart-schedule-card">
+        <span className="smart-schedule-icon"><Icon name="spark" size={18} /></span>
+        <div className="smart-schedule-copy">
+          <strong>Smart scheduling</strong>
+          <span>Find a free hour tomorrow for a task that fits.</span>
+          {suggestion && (
+            <div className="smart-schedule-result">
+              {suggestion.task
+                ? <><span><b>{suggestion.task.title}</b> · {formatDate(parseDateKey(suggestion.date))} at {formatTime(suggestion.startTime)}</span><button type="button" className="primary-button" onClick={() => { onScheduleTask(suggestion.task.id, suggestion.date, suggestion.startTime); setSuggestion(null) }}>Schedule task</button></>
+                : <span>No suitable task or free hour found for tomorrow.</span>}
+            </div>
+          )}
+        </div>
+        <button type="button" className="calendar-today smart-schedule-button" onClick={showSuggestion}>Suggest a time</button>
+      </section>
+
+      <section className="surface-card task-list-card task-manager-card">
+        <div className="task-manager-toolbar">
+          <div className="list-toolbar">
+            <div><h2>All tasks</h2><span>{tasks.length} {tasks.length === 1 ? 'item' : 'items'}</span></div>
+            <div className="filter-tabs" role="group" aria-label="Filter tasks">
+              {['All', 'Pending', 'Postponed', 'Overdue', 'Completed'].map(filter => (
+                <button type="button" key={filter} className={taskFilter === filter ? 'filter-active' : ''} onClick={() => setTaskFilter(filter)}>{filter}</button>
+              ))}
+            </div>
+          </div>
+          <label className="task-search-field"><Icon name="search" size={16} /><input aria-label="Search tasks" value={taskSearch} onChange={event => setTaskSearch(event.target.value)} placeholder="Search title, tag, project..." /></label>
+        </div>
+        {tasks.length ? (
+          <div className="task-manager-list">
+            {tasks.map(task => (
+              <TaskCard
+                key={task.id}
+                task={task}
+                allTasks={allTasks}
+                onEdit={() => openTaskForm(task)}
+                onToggle={onToggleTask}
+                onUpdate={onUpdateTask}
+                onDelete={() => {
+                  if (window.confirm(`Delete “${task.title}” and its task history?`)) onDeleteTask(task.id)
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state"><span className="empty-state-icon"><Icon name="check" size={23} /></span><h3>Nothing on this list</h3><p>No tasks match this view. Create one when you’re ready.</p></div>
+        )}
+      </section>
+      {formOpen && <TaskEditorModal task={editingTask} allTasks={allTasks} events={events} error={taskActionError} onClose={() => setFormOpen(false)} onSave={submitTask} />}
+    </>
+  )
+}
+
+function TaskCard({ task, allTasks, onEdit, onToggle, onUpdate, onDelete }) {
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const status = displayTaskStatus(task)
+  const blockedBy = task.dependencies
+    .map(id => allTasks.find(item => item.id === id))
+    .filter(item => item && displayTaskStatus(item) !== 'completed')
+  const subtaskProgress = task.subtasks.length
+    ? task.subtasks.filter(subtask => subtask.done).length
+    : 0
+
+  return (
+    <article className={`task-manager-item task-status-${status}`}>
+      <div className="task-manager-main">
+        <button
+          type="button"
+          className={`task-checkbox ${status === 'completed' ? 'task-checkbox-checked' : ''}`}
+          aria-label={status === 'completed' ? `Reopen ${task.title}` : `Complete ${task.title}`}
+          onClick={() => onToggle(task.id)}
+        >
+          {status === 'completed' && <Icon name="check" size={14} />}
+        </button>
+        <div className="task-manager-copy">
+          <strong className="task-manager-title">{task.title}</strong>
+          <div className="task-manager-meta">
+            <span className={`task-priority priority-${task.priority.toLowerCase()}`}>{task.priority}</span>
+            <span className={`task-status-label task-status-label-${status}`}>{status}</span>
+            {task.startDate && <span>Starts {formatDate(parseDateKey(task.startDate))}{task.startTime ? ` · ${formatTime(task.startTime)}` : ''}</span>}
+            {task.dueDate && <span>Due {formatDate(parseDateKey(task.dueDate))}</span>}
+            <span>{task.category}</span>
+          </div>
+          {task.tags.length > 0 && <div className="task-tags">{task.tags.map(tag => <span key={tag}>#{tag}</span>)}</div>}
+          {blockedBy.length > 0 && <div className="task-blocked-note">Waiting for {blockedBy.map(item => item.title).join(', ')}</div>}
+        </div>
+        <div className="task-manager-actions">
+          <button type="button" className="icon-button" aria-label={`Edit ${task.title}`} onClick={onEdit}><Icon name="edit" size={16} /></button>
+          <button type="button" className="row-delete" aria-label={`Delete ${task.title}`} onClick={onDelete}><Icon name="trash" size={16} /></button>
+        </div>
+      </div>
+
+      {(task.subtasks.length > 0 || task.estimatedMinutes || task.actualMinutes || task.project || task.goal || task.eventId || task.notes || task.attachments.length > 0) && (
+        <div className="task-manager-details">
+          {task.subtasks.length > 0 && (
+            <div className="task-subtasks">
+              <span className="task-detail-caption">Checklist {subtaskProgress}/{task.subtasks.length}</span>
+              {task.subtasks.map(subtask => (
+                <label key={subtask.id} className={`task-subtask ${subtask.done ? 'task-subtask-done' : ''}`}>
+                  <input type="checkbox" checked={subtask.done} onChange={event => onUpdate(task.id, {
+                    subtasks: task.subtasks.map(item => item.id === subtask.id ? { ...item, done: event.target.checked } : item),
+                  })} />
+                  <span>{subtask.title}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="task-detail-pills">
+            {task.estimatedMinutes && <span>Estimate {task.estimatedMinutes} min</span>}
+            <label className="task-actual-time">Actual <input type="number" min="0" aria-label={`Actual minutes for ${task.title}`} value={task.actualMinutes} onChange={event => onUpdate(task.id, { actualMinutes: Number(event.target.value) })} /> min</label>
+            {task.project && <span>Project: {task.project}</span>}
+            {task.goal && <span>Goal: {task.goal}</span>}
+            {task.eventId && <span>Linked event: {task.eventId}</span>}
+            {task.repeat !== 'none' && <span>Repeats {task.repeat}</span>}
+            {task.reminderAt && <span>Reminder {new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(task.reminderAt))}</span>}
+          </div>
+          {task.notes && <p className="task-notes-preview">{task.notes}</p>}
+          {task.attachments.length > 0 && (
+            <div className="task-attachments">
+              {task.attachments.map(file => <a key={file.id} download={file.name} href={file.dataUrl}>{file.name}</a>)}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="task-manager-footer">
+        {task.dependencies.length > 0 && <span>{task.dependencies.length} prerequisite{task.dependencies.length === 1 ? '' : 's'}</span>}
+        <button type="button" className="task-history-toggle" onClick={() => setHistoryOpen(open => !open)}>{historyOpen ? 'Hide history' : `History (${task.history.length})`}</button>
+      </div>
+      {historyOpen && (
+        <ol className="task-history-list">
+          <li><span>Original due date</span><time>{task.originalDueDate ? formatDate(parseDateKey(task.originalDueDate)) : 'Not set'}</time></li>
+          {task.history.map(item => (
+            <li key={item.id}>
+              <span>{item.action}{item.fromDate !== item.toDate && (item.fromDate || item.toDate) ? ` · ${item.fromDate ? formatDate(parseDateKey(item.fromDate)) : 'No date'} → ${item.toDate ? formatDate(parseDateKey(item.toDate)) : 'No date'}` : ''}</span>
+              <time>{formatDate(new Date(item.at))}</time>
+            </li>
+          ))}
+        </ol>
+      )}
+    </article>
+  )
+}
+
+function TaskEditorModal({ task, allTasks, events, error, onClose, onSave }) {
+  const [draft, setDraft] = useState(() => normalizeTask(task || { title: '', status: 'pending' }))
+  const [subtaskDraft, setSubtaskDraft] = useState('')
+  const [attachmentError, setAttachmentError] = useState('')
+  const dateError = (draft.startDate && draft.dueDate && draft.dueDate < draft.startDate)
+    || (draft.repeat !== 'none' && !draft.startDate && !draft.dueDate)
+  const candidates = allTasks.filter(item => item.id !== task?.id)
+
+  function update(field, value) {
+    setDraft(current => ({ ...current, [field]: value }))
+  }
+
+  function addSubtask(event) {
+    event.preventDefault()
+    const title = subtaskDraft.trim()
+    if (!title) return
+    update('subtasks', [...draft.subtasks, { id: createId(), title, done: false }])
+    setSubtaskDraft('')
+  }
+
+  async function addAttachments(event) {
+    const files = Array.from(event.target.files || [])
+    const invalidFile = files.find(file => file.size > 2 * 1024 * 1024)
+    if (invalidFile) {
+      setAttachmentError(`${invalidFile.name} is larger than the 2 MB per-file limit.`)
+      event.target.value = ''
+      return
+    }
+    try {
+      const attachments = await Promise.all(files.map(file => new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve({
+          id: createId(),
+          name: file.name,
+          size: file.size,
+          type: file.type || 'application/octet-stream',
+          dataUrl: reader.result,
+        })
+        reader.onerror = () => reject(reader.error || new Error(`Unable to read ${file.name}.`))
+        reader.readAsDataURL(file)
+      })))
+      update('attachments', [...draft.attachments, ...attachments])
+      setAttachmentError('')
+    } catch (error) {
+      setAttachmentError(`Attachment could not be added: ${error.message}`)
+    }
+    event.target.value = ''
+  }
+
+  return (
+    <div className="task-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+      <form className="task-editor-modal" onSubmit={event => { event.preventDefault(); onSave({ ...draft, title: draft.title.trim() }) }}>
+        <div className="task-editor-heading">
+          <div><p className="eyebrow">TASK DETAILS</p><h2>{task ? 'Edit task' : 'Create a task'}</h2></div>
+          <button type="button" className="icon-button" aria-label="Close task form" onClick={onClose}>×</button>
+        </div>
+        <label className="task-form-field task-form-title"><span>Task title</span><input autoFocus required maxLength={180} value={draft.title} onChange={event => update('title', event.target.value)} placeholder="What needs to get done?" /></label>
+        <div className="task-form-grid">
+          <label className="task-form-field"><span>Start date</span><input type="date" value={draft.startDate} onChange={event => update('startDate', event.target.value)} /></label>
+          <label className="task-form-field"><span>Start time</span><input type="time" value={draft.startTime} onChange={event => update('startTime', event.target.value)} /></label>
+          <label className="task-form-field"><span>Due date</span><input type="date" value={draft.dueDate} onChange={event => update('dueDate', event.target.value)} /></label>
+          <label className="task-form-field"><span>Priority</span><select value={draft.priority} onChange={event => update('priority', event.target.value)}>{taskPriorities.map(priority => <option key={priority}>{priority}</option>)}</select></label>
+          <label className="task-form-field"><span>Status</span><select value={draft.status} onChange={event => update('status', event.target.value)}>{taskStatuses.map(status => <option key={status} value={status}>{status[0].toUpperCase() + status.slice(1)}</option>)}</select></label>
+          <label className="task-form-field"><span>Category</span><input maxLength={40} value={draft.category} onChange={event => update('category', event.target.value)} /></label>
+          <label className="task-form-field"><span>Tags (comma-separated)</span><input value={draft.tags.join(', ')} onChange={event => update('tags', event.target.value.split(',').map(tag => tag.trim()).filter(Boolean))} placeholder="planning, focus" /></label>
+          <label className="task-form-field"><span>Repeat</span><select value={draft.repeat} onChange={event => update('repeat', event.target.value)}><option value="none">Does not repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
+          <label className="task-form-field"><span>Estimated minutes</span><input type="number" min="0" value={draft.estimatedMinutes} onChange={event => update('estimatedMinutes', event.target.value === '' ? '' : Number(event.target.value))} /></label>
+          <label className="task-form-field"><span>Actual minutes</span><input type="number" min="0" value={draft.actualMinutes} onChange={event => update('actualMinutes', Number(event.target.value))} /></label>
+          <label className="task-form-field"><span>Reminder</span><input type="datetime-local" value={draft.reminderAt} onChange={event => update('reminderAt', event.target.value)} /></label>
+          <label className="task-form-field"><span>Project</span><input maxLength={80} value={draft.project} onChange={event => update('project', event.target.value)} placeholder="Optional project" /></label>
+          <label className="task-form-field"><span>Goal</span><input maxLength={80} value={draft.goal} onChange={event => update('goal', event.target.value)} placeholder="Optional goal" /></label>
+          <label className="task-form-field"><span>Related event</span><select value={draft.eventId} onChange={event => update('eventId', event.target.value)}><option value="">None</option>{events.map(item => <option key={item.id} value={item.id}>{item.title} · {formatDate(parseDateKey(item.date))}</option>)}</select></label>
+        </div>
+        {dateError && <p className="task-form-error">{draft.startDate && draft.dueDate && draft.dueDate < draft.startDate ? 'The start date must be on or before the due date.' : 'A recurring task needs a start or due date.'}</p>}
+
+        <section className="task-form-section">
+          <div className="task-form-section-heading"><strong>Subtasks & checklist</strong><span>{draft.subtasks.filter(item => item.done).length}/{draft.subtasks.length}</span></div>
+          <div className="subtask-entry"><input aria-label="New subtask" value={subtaskDraft} onChange={event => setSubtaskDraft(event.target.value)} placeholder="Add a checklist item" /><button type="button" className="calendar-today" onClick={addSubtask}>Add</button></div>
+          {draft.subtasks.map(item => (
+            <div className="task-form-subtask" key={item.id}>
+              <label><input type="checkbox" checked={item.done} onChange={event => update('subtasks', draft.subtasks.map(subtask => subtask.id === item.id ? { ...subtask, done: event.target.checked } : subtask))} /><span>{item.title}</span></label>
+              <button type="button" aria-label={`Remove ${item.title}`} onClick={() => update('subtasks', draft.subtasks.filter(subtask => subtask.id !== item.id))}>×</button>
+            </div>
+          ))}
+        </section>
+
+        <section className="task-form-section">
+          <div className="task-form-section-heading"><strong>Dependencies</strong><span>Complete these first</span></div>
+          <div className="task-dependency-list">
+            {candidates.map(item => (
+              <label key={item.id}><input type="checkbox" checked={draft.dependencies.includes(item.id)} onChange={event => update('dependencies', event.target.checked ? [...draft.dependencies, item.id] : draft.dependencies.filter(id => id !== item.id))} /><span>{item.title}</span><small>{displayTaskStatus(item)}</small></label>
+            ))}
+            {!candidates.length && <span className="task-form-hint">Add another task to create a dependency.</span>}
+          </div>
+        </section>
+
+        <label className="task-form-field task-form-notes"><span>Notes</span><textarea rows="3" maxLength={3000} value={draft.notes} onChange={event => update('notes', event.target.value)} placeholder="Context, details, or links" /></label>
+        <section className="task-form-section">
+          <div className="task-form-section-heading"><strong>Attachments</strong><span>Up to 2 MB per file</span></div>
+          <input type="file" multiple onChange={addAttachments} />
+          {attachmentError && <p className="task-form-error">{attachmentError}</p>}
+          {draft.attachments.map(file => <div className="task-form-attachment" key={file.id}><span>{file.name} · {(file.size / 1024).toFixed(0)} KB</span><button type="button" onClick={() => update('attachments', draft.attachments.filter(item => item.id !== file.id))}>Remove</button></div>)}
+        </section>
+        <div className="task-editor-actions">
+          <button type="button" className="calendar-today" onClick={onClose}>Cancel</button>
+          <button type="submit" className="primary-button" disabled={!draft.title.trim() || Boolean(dateError)}>Save task</button>
+        </div>
+        {error && <p className="task-form-error" role="alert">{error}</p>}
       </form>
-      <section className="surface-card task-list-card">
-        <div className="list-toolbar">
-          <div><h2>All tasks</h2><span>{tasks.length} {tasks.length === 1 ? 'item' : 'items'}</span></div>
-          <div className="filter-tabs" role="group" aria-label="Filter tasks">
-            {['All', 'Active', 'Completed'].map(filter => (
-              <button type="button" key={filter} className={taskFilter === filter ? 'filter-active' : ''} onClick={() => setTaskFilter(filter)}>{filter}</button>
+    </div>
+  )
+}
+
+function CalendarPage({ events, tasks, onSaveEvent, onDeleteEvent, onMoveItem, onToggleTask }) {
+  const [viewType, setViewType] = useState('Month')
+  const [currentDate, setCurrentDate] = useState(() => new Date())
+  const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date()))
+  const [todayKey] = useState(() => dateKey(new Date()))
+  const [formOpen, setFormOpen] = useState(false)
+  const [editingId, setEditingId] = useState(null)
+  const [draggedItem, setDraggedItem] = useState(null)
+  const [eventDraft, setEventDraft] = useState({})
+
+  function openEventForm(date = selectedDate, event = null) {
+    setEditingId(event?.id ?? null)
+    setEventDraft(event ? { ...event } : {
+      title: '',
+      date,
+      startTime: '09:00',
+      endTime: '10:00',
+      category: 'Personal',
+      repeat: 'none',
+      notes: '',
+    })
+    setFormOpen(true)
+  }
+
+  function submitEvent(event) {
+    event.preventDefault()
+    if (eventDraft.endTime <= eventDraft.startTime) return
+    onSaveEvent({
+      ...eventDraft,
+      id: editingId ?? createId(),
+      title: eventDraft.title.trim(),
+    })
+    setFormOpen(false)
+  }
+
+  function changeDate(direction) {
+    const next = new Date(currentDate)
+    if (viewType === 'Week') next.setDate(next.getDate() + direction * 7)
+    else if (viewType === 'Day') next.setDate(next.getDate() + direction)
+    else if (viewType === 'Agenda') next.setDate(next.getDate() + direction * 30)
+    else next.setMonth(next.getMonth() + direction, 1)
+    setCurrentDate(next)
+    setSelectedDate(dateKey(next))
+  }
+
+  function chooseView(nextView) {
+    setViewType(nextView)
+    setSelectedDate(dateKey(currentDate))
+  }
+
+  function moveItemToDate(date) {
+    if (draggedItem) onMoveItem(draggedItem, date)
+    setDraggedItem(null)
+  }
+
+  let visibleDates
+  if (viewType === 'Month') {
+    const firstOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1)
+    const gridStart = startOfWeek(firstOfMonth)
+    visibleDates = Array.from({ length: 42 }, (_, index) => addDays(gridStart, index))
+  } else if (viewType === 'Week') {
+    const weekStart = startOfWeek(currentDate)
+    visibleDates = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index))
+  } else if (viewType === 'Agenda') {
+    const monthStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1)
+    visibleDates = Array.from(
+      { length: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate() },
+      (_, index) => addDays(monthStart, index),
+    )
+  } else {
+    visibleDates = [currentDate]
+  }
+
+  function itemsForDate(date) {
+    const key = dateKey(date)
+    const eventItems = events.filter(event => eventOccursOnDate(event, key))
+      .map(event => ({ ...event, type: 'event', occurrenceDate: key }))
+    const taskItems = tasks.flatMap(task => {
+      const scheduled = task.startDate === key
+      const due = task.dueDate === key
+      if (!scheduled && !due) return []
+      return [{
+        ...task,
+        type: 'task',
+        calendarKind: scheduled ? 'scheduled' : 'due',
+        occurrenceDate: key,
+        startTime: scheduled ? (task.startTime || '09:00') : '23:59',
+        endTime: scheduled
+          ? minutesToTime(timeToMinutes(task.startTime || '09:00') + Number(task.estimatedMinutes || 60))
+          : '',
+      }]
+    })
+    return [...eventItems, ...taskItems].sort((a, b) => (
+      (a.startTime || '00:00').localeCompare(b.startTime || '00:00')
+    ))
+  }
+
+  const monthLabel = new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' }).format(currentDate)
+  const rangeLabel = viewType === 'Week'
+    ? `${new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' }).format(visibleDates[0])} – ${new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' }).format(visibleDates[6])}`
+    : viewType === 'Day'
+      ? new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(currentDate)
+      : viewType === 'Agenda'
+        ? monthLabel
+        : monthLabel
+  const viewDates = viewType === 'Month' ? visibleDates : visibleDates
+
+  function renderItems(date, compact = false) {
+    const items = itemsForDate(date)
+    const timedEvents = items.filter(item => item.startTime && item.endTime)
+    const conflicts = new Set()
+    timedEvents.forEach((item, index) => {
+      timedEvents.slice(index + 1).forEach(other => {
+        if (item.startTime < other.endTime && other.startTime < item.endTime) {
+          conflicts.add(item.id)
+          conflicts.add(other.id)
+        }
+      })
+    })
+    const visibleItems = compact ? items.slice(0, 3) : items
+    return (
+      <>
+        {conflicts.size > 0 && <span className="calendar-conflict" title="Events overlap">Overlap</span>}
+        {visibleItems.map(item => (
+          <CalendarItem
+            key={`${item.type}-${item.id}-${item.occurrenceDate}`}
+            item={item}
+            compact={compact}
+            conflicted={conflicts.has(item.id)}
+            onOpenEvent={() => openEventForm(item.occurrenceDate, events.find(event => event.id === item.id))}
+            onToggleTask={onToggleTask}
+            onDragStart={() => setDraggedItem(item)}
+          />
+        ))}
+        {compact && items.length > 3 && <span className="calendar-more">+{items.length - 3} more</span>}
+      </>
+    )
+  }
+
+  return (
+    <>
+      <section className="page-title-row calendar-title-row">
+        <div>
+          <p className="eyebrow">YOUR TIME, IN ONE PLACE</p>
+          <h1>Your calendar<span>.</span></h1>
+          <p className="welcome-subtitle">Events and task due dates, together.</p>
+        </div>
+        <button type="button" className="primary-button" onClick={() => openEventForm()}><Icon name="plus" size={16} /> New event</button>
+      </section>
+
+      <section className="surface-card calendar-card">
+        <div className="calendar-toolbar">
+          <div className="calendar-navigation">
+            <button type="button" className="calendar-arrow" aria-label="Previous date range" onClick={() => changeDate(-1)}>‹</button>
+            <button type="button" className="calendar-arrow" aria-label="Next date range" onClick={() => changeDate(1)}>›</button>
+            <button type="button" className="calendar-today" onClick={() => {
+              const today = new Date()
+              setCurrentDate(today)
+              setSelectedDate(dateKey(today))
+            }}>Today</button>
+            <h2>{rangeLabel}</h2>
+          </div>
+          <div className="calendar-view-tabs" role="group" aria-label="Calendar view">
+            {['Month', 'Week', 'Day', 'Agenda'].map(view => (
+              <button type="button" key={view} className={viewType === view ? 'calendar-view-active' : ''} onClick={() => chooseView(view)}>{view}</button>
             ))}
           </div>
         </div>
-        {tasks.length ? (
-          <div className="task-list">
-            {tasks.map(task => <TaskRow key={task.id} task={task} onToggle={onToggleTask} onDelete={onDeleteTask} />)}
+
+        {formOpen && (
+          <form className="calendar-event-form" onSubmit={submitEvent}>
+            <div className="event-form-heading">
+              <h3>{editingId ? 'Edit event' : 'New event'}</h3>
+              <button type="button" className="icon-button" aria-label="Close event form" onClick={() => setFormOpen(false)}>×</button>
+            </div>
+            <label className="event-field event-title-field">
+              <span>Title</span>
+              <input autoFocus required maxLength={100} value={eventDraft.title || ''} onChange={event => setEventDraft(current => ({ ...current, title: event.target.value }))} placeholder="What’s happening?" />
+            </label>
+            <div className="event-form-fields">
+              <label className="event-field"><span>Date</span><input type="date" required value={eventDraft.date || ''} onChange={event => setEventDraft(current => ({ ...current, date: event.target.value }))} /></label>
+              <label className="event-field"><span>Starts</span><input type="time" required value={eventDraft.startTime || ''} onChange={event => setEventDraft(current => ({ ...current, startTime: event.target.value }))} /></label>
+              <label className="event-field"><span>Ends</span><input type="time" required value={eventDraft.endTime || ''} onChange={event => setEventDraft(current => ({ ...current, endTime: event.target.value }))} /></label>
+              <label className="event-field"><span>Category</span><select value={eventDraft.category || 'Personal'} onChange={event => setEventDraft(current => ({ ...current, category: event.target.value }))}>{eventCategories.map(category => <option key={category.name}>{category.name}</option>)}</select></label>
+              <label className="event-field"><span>Repeat</span><select value={eventDraft.repeat || 'none'} onChange={event => setEventDraft(current => ({ ...current, repeat: event.target.value }))}><option value="none">Does not repeat</option><option value="daily">Every day</option><option value="weekly">Every week</option><option value="monthly">Every month</option></select></label>
+            </div>
+            {eventDraft.endTime && eventDraft.startTime && eventDraft.endTime <= eventDraft.startTime && <p className="event-form-error">End time must be after start time.</p>}
+            <label className="event-field event-notes-field"><span>Notes</span><textarea rows="2" maxLength={1000} value={eventDraft.notes || ''} onChange={event => setEventDraft(current => ({ ...current, notes: event.target.value }))} placeholder="Add a note to this event" /></label>
+            <div className="event-form-actions">
+              {editingId && <button type="button" className="event-delete-button" onClick={() => { onDeleteEvent(editingId); setFormOpen(false) }}>Delete event</button>}
+              <button type="button" className="calendar-today" onClick={() => setFormOpen(false)}>Cancel</button>
+              <button type="submit" className="primary-button" disabled={!eventDraft.title?.trim() || eventDraft.endTime <= eventDraft.startTime}>Save event</button>
+            </div>
+          </form>
+        )}
+
+        {viewType === 'Month' ? (
+          <div className="calendar-month">
+            <div className="calendar-weekdays">{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => <span key={day}>{day}</span>)}</div>
+            <div className="calendar-month-grid">
+              {viewDates.map(date => {
+                const key = dateKey(date)
+                return (
+                  <div
+                    key={key}
+                    className={`calendar-month-day ${date.getMonth() !== currentDate.getMonth() ? 'calendar-outside-month' : ''} ${key === todayKey ? 'calendar-today-cell' : ''} ${selectedDate === key ? 'calendar-selected-cell' : ''}`}
+                    onDragOver={event => event.preventDefault()}
+                    onDrop={() => moveItemToDate(key)}
+                    onClick={() => setSelectedDate(key)}
+                  >
+                    <button type="button" className="calendar-day-number" onClick={event => { event.stopPropagation(); setSelectedDate(key) }}>{date.getDate()}</button>
+                    <div className="calendar-day-items">{renderItems(date, true)}</div>
+                    <button type="button" className="calendar-add-day" aria-label={`Add event on ${key}`} onClick={event => { event.stopPropagation(); setSelectedDate(key); openEventForm(key) }}>+</button>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         ) : (
-          <div className="empty-state"><span className="empty-state-icon"><Icon name="check" size={23} /></span><h3>Nothing on this list</h3><p>Enjoy the breathing room, or add your next task above.</p></div>
+          <div className={`calendar-list-view calendar-list-${viewType.toLowerCase()}`}>
+            {visibleDates.map(date => {
+              const key = dateKey(date)
+              const dateItems = itemsForDate(date)
+              return (
+                <section key={key} className={`calendar-list-day ${key === todayKey ? 'calendar-list-today' : ''}`} onDragOver={event => event.preventDefault()} onDrop={() => moveItemToDate(key)}>
+                  <div className="calendar-list-date">
+                    <span>{new Intl.DateTimeFormat('en', { weekday: 'short' }).format(date)}</span>
+                    <strong>{date.getDate()}</strong>
+                    <small>{new Intl.DateTimeFormat('en', { month: 'short' }).format(date)}</small>
+                  </div>
+                  <div className="calendar-list-items">
+                    {dateItems.length ? renderItems(date) : <span className="calendar-no-events">Nothing scheduled</span>}
+                    <button type="button" className="calendar-add-list-event" onClick={() => { setSelectedDate(key); openEventForm(key) }}>+ Add event</button>
+                  </div>
+                </section>
+              )
+            })}
+          </div>
         )}
+
+        <div className="calendar-legend">
+          {eventCategories.map(category => <span key={category.name}><i style={{ backgroundColor: category.color }} />{category.name}</span>)}
+          <span><i className="task-legend-dot" />Task due</span>
+        </div>
       </section>
     </>
+  )
+}
+
+function CalendarItem({ item, compact, conflicted, onOpenEvent, onToggleTask, onDragStart }) {
+  if (item.type === 'task') {
+    return (
+      <div className={`calendar-item calendar-task-item ${item.calendarKind === 'scheduled' ? 'calendar-task-scheduled' : ''} ${item.done ? 'calendar-item-done' : ''}`} draggable onDragStart={onDragStart} title={`${item.calendarKind === 'scheduled' ? 'Scheduled' : 'Due'} ${item.occurrenceDate}: ${item.title}`}>
+        <button type="button" className="calendar-task-check" aria-label={item.done ? `Mark ${item.title} as not done` : `Complete ${item.title}`} onClick={() => onToggleTask(item.id)}>{item.done ? '✓' : ''}</button>
+        <span className="calendar-item-title">{item.title}</span>
+        {!compact && <><span className="calendar-event-time">{formatTime(item.startTime)}</span><small>{item.calendarKind === 'scheduled' ? 'Scheduled' : 'Due'}</small></>}
+      </div>
+    )
+  }
+  const category = eventCategories.find(option => option.name === item.category) || eventCategories[0]
+  return (
+    <div
+      className={`calendar-item calendar-event-item ${conflicted ? 'calendar-item-conflict' : ''}`}
+      draggable
+      onDragStart={onDragStart}
+      style={{ '--event-color': category.color }}
+      title={`${item.title}${item.notes ? ` — ${item.notes}` : ''}${item.repeat !== 'none' ? ` · Repeats ${item.repeat}` : ''}`}
+    >
+      <button type="button" className="calendar-event-open" onClick={onOpenEvent}>
+        {!compact && <span className="calendar-event-time">{formatTime(item.startTime)}</span>}
+        <span className="calendar-item-title">{item.title}</span>
+        {item.repeat !== 'none' && <span className="calendar-repeat-mark" aria-label={`Repeats ${item.repeat}`}>↻</span>}
+      </button>
+    </div>
   )
 }
 
