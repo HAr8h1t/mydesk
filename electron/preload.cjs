@@ -10,5 +10,6 @@ contextBridge.exposeInMainWorld('mydesk', {
   tasks: {
     load: () => ipcRenderer.invoke('tasks:list'),
     save: tasks => ipcRenderer.invoke('tasks:save', tasks),
+    historyForDate: date => ipcRenderer.invoke('tasks:history-for-date', date),
   },
 })

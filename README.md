@@ -354,6 +354,10 @@ subtasks, dependencies, attachments, and activity history are stored with the
 task record. Notes and calendar events use local storage. Calendar task entries
 are derived from task dates, so rescheduling a task updates its calendar entry.
 
+The Daily Timeline brings together tasks, reminders, events, notes, and task
+schedule history for a selected date. Task history is indexed by activity date
+in SQLite for date-based timeline queries.
+
 Tasks support dates, priorities, categories, tags, checklists, recurrence,
 dependencies, estimates, time spent, notes, attachments, status, and history.
 Smart scheduling suggests a task that fits a free hour tomorrow. The calendar

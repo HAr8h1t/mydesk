@@ -34,6 +34,7 @@ const initialNotes = [
 
 const navigation = [
   { label: 'Dashboard', icon: 'home' },
+  { label: 'Timeline', icon: 'clock' },
   { label: 'Calendar', icon: 'calendar' },
   { label: 'Tasks', icon: 'check' },
   { label: 'Reminders', icon: 'bell' },
@@ -167,6 +168,146 @@ function normalizeTask(task) {
   }
 }
 
+function normalizeNote(note) {
+  const updatedAt = note.updatedAt || new Date().toISOString()
+  return {
+    ...note,
+    createdAt: note.createdAt || updatedAt,
+    updatedAt,
+  }
+}
+
+function localDateKey(value) {
+  return dateKey(new Date(value))
+}
+
+function formatClock(value) {
+  return value
+    ? new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(new Date(value))
+    : ''
+}
+
+function localTimeKey(value) {
+  const date = new Date(value)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+function timelineActivities(date, tasks, events, notes, history) {
+  const activities = []
+  const completedByDate = task => task.completedAt && localDateKey(task.completedAt) <= date
+
+  tasks.forEach(task => {
+    const status = completedByDate(task) ? 'completed' : displayTaskStatus(task, date)
+    const dateDetails = task.originalDueDate && task.dueDate && task.originalDueDate !== task.dueDate
+      ? `Originally due ${formatDate(parseDateKey(task.originalDueDate))}; now due ${formatDate(parseDateKey(task.dueDate))}`
+      : ''
+    if (task.startDate === date) {
+      activities.push({
+        id: `${task.id}-start-${date}`,
+        kind: 'task',
+        title: task.title,
+        time: task.startTime || '',
+        sortTime: task.startTime || '09:00',
+        status,
+        detail: [task.category, task.priority, dateDetails].filter(Boolean).join(' · '),
+        taskId: task.id,
+      })
+    }
+    if (task.dueDate === date && task.startDate !== date) {
+      activities.push({
+        id: `${task.id}-due-${date}`,
+        kind: 'task',
+        title: task.title,
+        time: '',
+        sortTime: '23:59',
+        status,
+        detail: [`Due today`, task.category, task.priority, dateDetails].filter(Boolean).join(' · '),
+        taskId: task.id,
+      })
+    }
+    if (task.completedAt && localDateKey(task.completedAt) === date) {
+      activities.push({
+        id: `${task.id}-completed-${date}`,
+        kind: 'task',
+        title: task.title,
+        time: formatClock(task.completedAt),
+        sortTime: localTimeKey(task.completedAt),
+        status: 'completed',
+        detail: 'Task completed',
+        taskId: task.id,
+      })
+    }
+    if (task.reminderAt && localDateKey(task.reminderAt) === date) {
+      activities.push({
+        id: `${task.id}-reminder-${date}`,
+        kind: 'reminder',
+        title: task.title,
+        time: formatClock(task.reminderAt),
+        sortTime: localTimeKey(task.reminderAt),
+        status: completedByDate(task) ? 'completed' : 'scheduled',
+        detail: 'Task reminder',
+        taskId: task.id,
+      })
+    }
+    if (task.originalDueDate === date && task.dueDate && task.dueDate !== date) {
+      activities.push({
+        id: `${task.id}-original-due-${date}`,
+        kind: 'activity',
+        title: task.title,
+        time: '',
+        sortTime: '23:58',
+        status: 'changed',
+        detail: `Originally due today · moved to ${formatDate(parseDateKey(task.dueDate))}`,
+        taskId: task.id,
+      })
+    }
+  })
+
+  events.filter(event => eventOccursOnDate(event, date)).forEach(event => {
+    activities.push({
+      id: `${event.id}-${date}`,
+      kind: 'event',
+      title: event.title,
+      time: event.startTime || '',
+      sortTime: event.startTime || '00:00',
+      status: 'scheduled',
+      detail: [event.category, event.repeat !== 'none' ? `Repeats ${event.repeat}` : ''].filter(Boolean).join(' · '),
+      notes: event.notes,
+    })
+  })
+
+  notes.filter(note => localDateKey(note.createdAt) === date).forEach(note => {
+    activities.push({
+      id: `${note.id}-created-${date}`,
+      kind: 'note',
+      title: note.title || 'Untitled note',
+      time: formatClock(note.createdAt),
+      sortTime: localTimeKey(note.createdAt),
+      status: 'created',
+      detail: note.body,
+    })
+  })
+
+  history.forEach(entry => {
+    const changedDate = entry.fromDate && entry.toDate && entry.fromDate !== entry.toDate
+      ? `${formatDate(parseDateKey(entry.fromDate))} → ${formatDate(parseDateKey(entry.toDate))}`
+      : ''
+    const time = formatClock(entry.at)
+    activities.push({
+      id: `history-${entry.id}`,
+      kind: 'activity',
+      title: entry.title,
+      time,
+      sortTime: localTimeKey(entry.at),
+      status: entry.action.toLowerCase().includes('complet') ? 'completed' : 'changed',
+      detail: [entry.action, changedDate].filter(Boolean).join(' · '),
+      taskId: entry.taskId,
+    })
+  })
+
+  return activities.sort((left, right) => left.sortTime.localeCompare(right.sortTime))
+}
+
 function displayTaskStatus(task, today = dateKey(new Date())) {
   if (task.status === 'completed' || task.done) return 'completed'
   if (task.status === 'postponed') return 'postponed'
@@ -229,7 +370,7 @@ function App() {
     events: readStorage('mydesk-events', []),
   }))
   const [tasks, setTasks] = useState(() => storedContent.tasks.map(normalizeTask))
-  const [notes, setNotes] = useState(storedContent.notes)
+  const [notes, setNotes] = useState(() => storedContent.notes.map(normalizeNote))
   const [events, setEvents] = useState(storedContent.events)
   const [activeView, setActiveView] = useState('Dashboard')
   const [taskFilter, setTaskFilter] = useState('All')
@@ -443,11 +584,13 @@ function App() {
   }
 
   function createNote() {
+    const now = new Date().toISOString()
     const note = {
       id: createId(),
       title: 'Untitled note',
       body: '',
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     }
     setNotes(current => [note, ...current])
     setSelectedNoteId(note.id)
@@ -558,6 +701,10 @@ function App() {
             />
           )}
 
+          {activeView === 'Timeline' && (
+            <TimelinePage tasks={tasks} events={events} notes={notes} />
+          )}
+
           {activeView === 'Calendar' && (
             <CalendarPage
               events={events}
@@ -600,7 +747,7 @@ function App() {
             />
           )}
 
-          {!['Dashboard', 'Tasks', 'Calendar', 'Notes'].includes(activeView) && (
+          {!['Dashboard', 'Tasks', 'Timeline', 'Calendar', 'Notes'].includes(activeView) && (
             <ComingSoonPage title={activeView} />
           )}
         </div>
@@ -1034,6 +1181,201 @@ function TaskEditorModal({ task, allTasks, events, error, onClose, onSave }) {
         {error && <p className="task-form-error" role="alert">{error}</p>}
       </form>
     </div>
+  )
+}
+
+function getTimelineSummary(activities) {
+  const taskIds = new Set(activities
+    .filter(activity => activity.kind === 'task' || (activity.kind === 'activity' && activity.status === 'completed'))
+    .map(activity => activity.taskId))
+  const completedTaskIds = new Set(activities
+    .filter(activity => activity.status === 'completed' && activity.taskId)
+    .map(activity => activity.taskId))
+  return {
+    tasks: taskIds.size,
+    completed: completedTaskIds.size,
+    events: activities.filter(activity => activity.kind === 'event').length,
+    reminders: activities.filter(activity => activity.kind === 'reminder').length,
+    notes: activities.filter(activity => activity.kind === 'note').length,
+    changes: activities.filter(activity => activity.kind === 'activity' && activity.status === 'changed').length,
+  }
+}
+
+function TimelineSummary({ activities, label }) {
+  const summary = getTimelineSummary(activities)
+  return (
+    <section className="timeline-summary surface-card" aria-label={`${label} summary`}>
+      <div className="timeline-summary-heading"><span>{label}</span><strong>{summary.completed} of {summary.tasks} tasks complete</strong></div>
+      <div className="timeline-progress-track"><span style={{ width: `${summary.tasks ? Math.min(100, Math.round(summary.completed / summary.tasks * 100)) : 0}%` }} /></div>
+      <div className="timeline-summary-counts">
+        <span><b>{summary.tasks}</b> tasks</span>
+        <span><b>{summary.events}</b> events</span>
+        <span><b>{summary.reminders}</b> reminders</span>
+        <span><b>{summary.notes}</b> notes</span>
+        <span><b>{summary.changes}</b> schedule changes</span>
+      </div>
+    </section>
+  )
+}
+
+function TimelinePage({ tasks, events, notes }) {
+  const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date()))
+  const [compareDate, setCompareDate] = useState('')
+  const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [historyByDate, setHistoryByDate] = useState({})
+  const [historyErrors, setHistoryErrors] = useState({})
+
+  useEffect(() => {
+    let active = true
+    const dates = [...new Set([selectedDate, compareDate].filter(Boolean))]
+    const taskStore = window.mydesk?.tasks
+    Promise.all(dates.map(date => {
+      if (taskStore?.historyForDate) return taskStore.historyForDate(date)
+      return Promise.resolve(tasks.flatMap(task => task.history
+        .filter(item => localDateKey(item.at) === date)
+        .map(item => ({ ...item, taskId: task.id, title: task.title }))))
+    })).then(records => {
+      if (!active) return
+      setHistoryByDate(current => ({
+        ...current,
+        ...Object.fromEntries(dates.map((date, index) => [date, records[index]])),
+      }))
+      setHistoryErrors(current => {
+        const next = { ...current }
+        dates.forEach(date => delete next[date])
+        return next
+      })
+    }).catch(error => {
+      if (!active) return
+      setHistoryErrors(current => {
+        const next = { ...current }
+        dates.forEach(date => {
+          next[date] = `Task history could not be loaded: ${error.message}`
+        })
+        return next
+      })
+    })
+    return () => { active = false }
+  }, [compareDate, selectedDate, tasks])
+
+  function moveDate(amount) {
+    setSelectedDate(dateKey(addDays(parseDateKey(selectedDate), amount)))
+  }
+
+  const currentActivities = timelineActivities(
+    selectedDate,
+    tasks,
+    events,
+    notes,
+    historyByDate[selectedDate] || [],
+  )
+  const formattedDate = new Intl.DateTimeFormat('en', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(parseDateKey(selectedDate))
+  const query = search.trim().toLowerCase()
+  const visibleActivities = currentActivities.filter(activity => {
+    if (typeFilter !== 'all' && activity.kind !== typeFilter) return false
+    if (statusFilter !== 'all' && activity.status !== statusFilter) return false
+    if (!query) return true
+    return `${activity.title} ${activity.kind} ${activity.status} ${activity.detail} ${activity.notes || ''} ${formattedDate}`
+      .toLowerCase().includes(query)
+  })
+  const compareActivities = compareDate
+    ? timelineActivities(compareDate, tasks, events, notes, historyByDate[compareDate] || [])
+    : []
+  const selectedSummary = getTimelineSummary(currentActivities)
+  const compareSummary = getTimelineSummary(compareActivities)
+  const historyLoading = (
+    !Object.prototype.hasOwnProperty.call(historyByDate, selectedDate) && !historyErrors[selectedDate]
+  ) || Boolean(compareDate && !Object.prototype.hasOwnProperty.call(historyByDate, compareDate) && !historyErrors[compareDate])
+  const historyError = historyErrors[selectedDate] || (compareDate && historyErrors[compareDate])
+  const compareDifference = selectedSummary.completed - compareSummary.completed
+  const comparisonMessage = compareDate === selectedDate
+    ? 'Choose a different date to compare.'
+    : compareDifference === 0
+      ? 'Both days had the same number of completed tasks.'
+      : `${Math.abs(compareDifference)} more task${Math.abs(compareDifference) === 1 ? '' : 's'} completed on ${compareDifference > 0 ? formattedDate : new Intl.DateTimeFormat('en', { month: 'long', day: 'numeric', year: 'numeric' }).format(parseDateKey(compareDate))}.`
+
+  return (
+    <>
+      <section className="page-title-row timeline-title-row">
+        <div>
+          <p className="eyebrow">YOUR DAY, IN ONE PLACE</p>
+          <h1>Daily timeline<span>.</span></h1>
+          <p className="welcome-subtitle">A living record of what you planned, did, and changed.</p>
+        </div>
+        <div className="timeline-date-picker">
+          <button type="button" className="calendar-arrow" aria-label="Previous day" onClick={() => moveDate(-1)}>‹</button>
+          <input aria-label="Timeline date" type="date" value={selectedDate} onChange={event => { if (event.target.value) setSelectedDate(event.target.value) }} />
+          <button type="button" className="calendar-arrow" aria-label="Next day" onClick={() => moveDate(1)}>›</button>
+          <button type="button" className="calendar-today" onClick={() => setSelectedDate(dateKey(new Date()))}>Today</button>
+        </div>
+      </section>
+
+      <TimelineSummary activities={currentActivities} label={formattedDate} />
+
+      <section className="timeline-controls surface-card">
+        <label><Icon name="search" size={17} /><input aria-label="Search timeline" placeholder="Search this day’s activities..." value={search} onChange={event => setSearch(event.target.value)} /></label>
+        <label className="timeline-select-label"><span>Type</span><select aria-label="Filter timeline by type" value={typeFilter} onChange={event => setTypeFilter(event.target.value)}>
+          <option value="all">All activity</option><option value="task">Tasks</option><option value="event">Events</option><option value="reminder">Reminders</option><option value="note">Notes</option><option value="activity">Schedule changes</option>
+        </select></label>
+        <label className="timeline-select-label"><span>Status</span><select aria-label="Filter timeline by status" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}>
+          <option value="all">Any status</option><option value="scheduled">Scheduled</option><option value="pending">Pending</option><option value="completed">Completed</option><option value="postponed">Postponed</option><option value="changed">Changed</option><option value="created">Created</option>
+        </select></label>
+        <button type="button" className="calendar-today timeline-compare-toggle" onClick={() => setCompareDate(value => value || dateKey(addDays(parseDateKey(selectedDate), -1)))}>{compareDate ? 'Comparing days' : 'Compare days'}</button>
+      </section>
+
+      {compareDate && (
+        <section className="timeline-compare-panel">
+          <label className="timeline-select-label"><span>Compare with</span><input aria-label="Compare date" type="date" value={compareDate} onChange={event => { if (event.target.value) setCompareDate(event.target.value) }} /></label>
+          <TimelineSummary activities={compareActivities} label={new Intl.DateTimeFormat('en', { month: 'long', day: 'numeric', year: 'numeric' }).format(parseDateKey(compareDate))} />
+          <p>{comparisonMessage}</p>
+          <button type="button" className="timeline-clear-compare" onClick={() => setCompareDate('')}>Close comparison</button>
+        </section>
+      )}
+
+      {historyError && <div className="task-storage-error" role="alert">{historyError}</div>}
+      <section className="timeline-list-card surface-card">
+        <div className="timeline-list-heading">
+          <div><p className="eyebrow">THE DAY, IN ORDER</p><h2>{formattedDate}</h2></div>
+          <span>{historyLoading ? 'Loading activity…' : `${visibleActivities.length} ${visibleActivities.length === 1 ? 'activity' : 'activities'}`}</span>
+        </div>
+        {visibleActivities.length ? (
+          <div className="daily-timeline">
+            {visibleActivities.map(activity => <TimelineEntry key={activity.id} activity={activity} />)}
+          </div>
+        ) : (
+          <div className="timeline-empty"><span className="coming-soon-icon"><Icon name="clock" size={21} /></span><strong>No matching activity</strong><span>Try another date or clear the current filters.</span></div>
+        )}
+        <p className="timeline-sources">Timeline combines tasks, task reminders, events, notes, and task schedule history. Alarms, focus sessions, and journal entries will appear when those modules are available.</p>
+      </section>
+    </>
+  )
+}
+
+function TimelineEntry({ activity }) {
+  const icon = {
+    task: 'check',
+    event: 'calendar',
+    reminder: 'bell',
+    note: 'note',
+    activity: 'arrow',
+  }[activity.kind] || 'spark'
+  return (
+    <article className={`timeline-entry timeline-entry-${activity.kind}`}>
+      <time className="timeline-entry-time">{activity.time || 'Any time'}</time>
+      <span className="timeline-entry-icon"><Icon name={icon} size={16} /></span>
+      <div className="timeline-entry-copy">
+        <div className="timeline-entry-heading"><strong>{activity.title}</strong><span className={`timeline-status timeline-status-${activity.status}`}>{activity.status}</span></div>
+        {activity.detail && <p>{activity.detail}</p>}
+        {activity.notes && <p className="timeline-entry-note">{activity.notes}</p>}
+      </div>
+    </article>
   )
 }
 

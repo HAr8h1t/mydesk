@@ -9,6 +9,15 @@ ipcMain.handle('tasks:list', () => ({
   hasImportedLegacyTasks: taskStore.hasImportedLegacyTasks(),
 }))
 ipcMain.handle('tasks:save', (_event, tasks) => taskStore.save(tasks))
+ipcMain.handle('tasks:history-for-date', (_event, date) => {
+  const parsedDate = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? new Date(`${date}T00:00:00.000Z`)
+    : null
+  if (!parsedDate || !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
+    throw new TypeError('A calendar date is required to search task history.')
+  }
+  return taskStore.historyForDate(date)
+})
 
 function createWindow() {
   const mainWindow = new BrowserWindow({

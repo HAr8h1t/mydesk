@@ -28,6 +28,15 @@ class TaskStore {
         payload TEXT NOT NULL,
         position INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS task_activity_index (
+        history_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        activity_date TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        payload TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_activity_date
+        ON task_activity_index (activity_date, occurred_at);
       CREATE TABLE IF NOT EXISTS task_attachments (
         id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -46,6 +55,20 @@ class TaskStore {
   hasImportedLegacyTasks() {
     const row = this.database.prepare("SELECT value FROM task_metadata WHERE key = 'legacy-imported'").get()
     return row?.value === 'true'
+  }
+
+  historyForDate(date) {
+    return this.database.prepare(`
+      SELECT activity.task_id AS taskId, tasks.title, activity.payload
+      FROM task_activity_index AS activity
+      JOIN tasks ON tasks.id = activity.task_id
+      WHERE activity.activity_date = ?
+      ORDER BY activity.occurred_at
+    `).all(date).map(row => ({
+      taskId: row.taskId,
+      title: row.title,
+      ...JSON.parse(row.payload),
+    }))
   }
 
   list() {
@@ -101,6 +124,7 @@ class TaskStore {
     const insertSubtask = this.database.prepare('INSERT INTO task_subtasks (id, task_id, title, done, position) VALUES (?, ?, ?, ?, ?)')
     const insertDependency = this.database.prepare('INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id) VALUES (?, ?)')
     const insertHistory = this.database.prepare('INSERT INTO task_history (id, task_id, payload, position) VALUES (?, ?, ?, ?)')
+    const insertActivity = this.database.prepare('INSERT INTO task_activity_index (history_id, task_id, activity_date, occurred_at, payload) VALUES (?, ?, ?, ?, ?)')
     const insertAttachment = this.database.prepare('INSERT INTO task_attachments (id, task_id, name, size, type, data_url) VALUES (?, ?, ?, ?, ?, ?)')
 
     this.database.exec('BEGIN IMMEDIATE')
@@ -123,7 +147,15 @@ class TaskStore {
           insertDependency.run(task.id, dependencyId)
         })
         history.forEach((entry, position) => {
-          insertHistory.run(entry.id, task.id, JSON.stringify(entry), position)
+          const payload = JSON.stringify(entry)
+          insertHistory.run(entry.id, task.id, payload, position)
+          const occurredAt = new Date(entry.at)
+          const activityDate = [
+            occurredAt.getFullYear(),
+            String(occurredAt.getMonth() + 1).padStart(2, '0'),
+            String(occurredAt.getDate()).padStart(2, '0'),
+          ].join('-')
+          insertActivity.run(entry.id, task.id, activityDate, entry.at, payload)
         })
         attachments.forEach(attachment => {
           insertAttachment.run(
