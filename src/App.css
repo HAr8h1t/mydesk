@@ -4964,3 +4964,666 @@ button {
     padding: 0 7px;
   }
 }
+
+.today-timeline-card {
+  margin-bottom: 14px;
+  padding: 18px 20px;
+}
+
+.today-timeline-scroll {
+  max-height: 300px;
+  overflow: auto;
+  padding: 2px 3px 2px 0;
+  overscroll-behavior: contain;
+}
+
+.today-timeline-item {
+  display: grid;
+  grid-template-columns: 84px 22px minmax(0, 1fr) auto;
+  min-height: 48px;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #f0f0ec;
+}
+
+.today-timeline-item:last-child {
+  border-bottom: 0;
+}
+
+.today-timeline-item time,
+.today-timeline-item small {
+  color: #8d8e87;
+  font-size: 11px;
+}
+
+.today-timeline-item strong {
+  overflow: hidden;
+  color: #474842;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.today-timeline-marker {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 50%;
+  color: #ad7151;
+  background: #fff0e8;
+}
+
+.today-timeline-task .today-timeline-marker {
+  color: #5e8a68;
+  background: #eaf4ec;
+}
+
+.today-timeline-reminder .today-timeline-marker {
+  color: #7f74a4;
+  background: #f0edf8;
+}
+
+.today-timeline-alarm .today-timeline-marker {
+  color: #4e829d;
+  background: #eaf3f7;
+}
+
+.today-timeline-done strong {
+  color: #8d8e87;
+  text-decoration: line-through;
+}
+
+.today-dashboard-widgets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.today-widget {
+  min-width: 0;
+  padding: 15px 17px;
+}
+
+.today-widget .section-heading {
+  align-items: center;
+  margin-bottom: 9px;
+}
+
+.today-widget .section-heading h2 {
+  margin: 0;
+  color: #41423c;
+  font-size: 15px;
+}
+
+.today-widget .section-heading > svg {
+  color: #b67a5e;
+}
+
+.today-widget-row {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid #f0f0ec;
+}
+
+.today-widget-row strong {
+  overflow: hidden;
+  color: #55564f;
+  font-size: 12px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.today-widget-row span {
+  flex: 0 0 auto;
+  color: #92938c;
+  font-size: 11px;
+}
+
+.today-dashboard-empty {
+  margin: 0;
+  padding: 8px 0 2px;
+  color: #96978f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.focus-scheduled-card {
+  margin: 14px 0;
+  padding: 18px 20px;
+}
+
+.focus-scheduled-description {
+  margin: -4px 0 12px;
+  color: #898a83;
+  font-size: 12px;
+}
+
+.focus-scheduled-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 13px;
+  border: 1px solid #efefeb;
+  border-radius: 11px;
+  background: #fafaf7;
+}
+
+.focus-scheduled-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  grid-column: 1 / -1;
+}
+
+.focus-scheduled-form-actions .primary-button,
+.focus-scheduled-form-actions .calendar-today {
+  min-height: 34px;
+}
+
+.focus-scheduled-list {
+  display: grid;
+}
+
+.focus-scheduled-item {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 0;
+  border-top: 1px solid #efefeb;
+}
+
+.focus-scheduled-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 10px;
+  color: #ad7151;
+  background: #fff0e8;
+}
+
+.focus-scheduled-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.focus-scheduled-copy strong {
+  overflow: hidden;
+  color: #454640;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focus-scheduled-copy span,
+.focus-scheduled-status {
+  color: #90918a;
+  font-size: 11px;
+}
+
+.focus-scheduled-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.focus-scheduled-actions .primary-button,
+.focus-scheduled-actions .calendar-today {
+  min-height: 30px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.focus-scheduled-status {
+  grid-column: 2 / -1;
+  color: #a06e4c;
+}
+
+.alarm-set-button {
+  min-width: 76px;
+}
+
+.alarm-set-button.alarm-is-set {
+  color: #68716b;
+}
+
+.calendar-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calendar-list-date {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.calendar-card {
+  touch-action: pan-y;
+}
+
+.calendar-list-date:focus-visible {
+  border-radius: 6px;
+  outline: 2px solid #c97656;
+  outline-offset: 3px;
+}
+
+.calendar-reminder-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-left: 2px solid #8a7bad;
+  color: #736593;
+  background: #f1eef8;
+}
+
+.calendar-reminder-item > svg {
+  flex: 0 0 auto;
+}
+
+.reminder-legend-dot {
+  background: #8a7bad;
+}
+
+.app-shell[data-theme="dark"] ::selection {
+  color: #171c1c;
+  background: #f0b091;
+}
+
+.app-shell[data-theme="dark"] select option,
+.app-shell[data-theme="dark"] select optgroup {
+  color: #e4e8e4;
+  background: #1b2222;
+}
+
+.app-shell[data-theme="dark"] select option:checked {
+  color: #171c1c;
+  background: #f0b091;
+}
+
+.app-shell[data-theme="dark"] .filter-tabs {
+  background: #303837;
+}
+
+.app-shell[data-theme="dark"] .filter-tabs button.filter-active {
+  color: #f1f3f0;
+  background: #4a5753;
+}
+
+.app-shell[data-theme="dark"] .note-list-selected,
+.app-shell[data-theme="dark"] .note-list-selected:hover {
+  border-color: #645348;
+  background: #35312e;
+}
+
+.app-shell[data-theme="dark"] .note-list-selected strong {
+  color: #f0b091;
+}
+
+.app-shell[data-theme="dark"] .filter-chip-active {
+  border-color: #725746;
+  color: #f0b091;
+  background: #3b302b;
+}
+
+.app-shell[data-theme="dark"] .focus-scheduled-form {
+  border-color: #343b3a;
+  background: #1d2424;
+}
+
+.app-shell[data-theme="dark"] .focus-scheduled-item,
+.app-shell[data-theme="dark"] .today-timeline-item,
+.app-shell[data-theme="dark"] .today-widget-row {
+  border-color: #343b3a;
+}
+
+.app-shell[data-theme="dark"] .focus-scheduled-icon,
+.app-shell[data-theme="dark"] .today-timeline-marker {
+  color: #f0b091;
+  background: #3b302b;
+}
+
+.app-shell[data-theme="dark"] .today-timeline-task .today-timeline-marker {
+  color: #aed0b3;
+  background: #2e3c32;
+}
+
+.app-shell[data-theme="dark"] .today-timeline-reminder .today-timeline-marker {
+  color: #c3b6e4;
+  background: #393248;
+}
+
+.app-shell[data-theme="dark"] .today-timeline-alarm .today-timeline-marker {
+  color: #a9d2e6;
+  background: #293a43;
+}
+
+.app-shell[data-theme="dark"] .calendar-reminder-item {
+  border-color: #aa96d0;
+  color: #d3c7ef;
+  background: #373044;
+}
+
+.app-shell[data-theme="dark"] .alarm-set-button.alarm-is-set {
+  border-color: #5a4940;
+  color: #efb292;
+  background: #3a302b;
+}
+
+@media (max-width: 700px) {
+  .today-dashboard-widgets {
+    grid-template-columns: 1fr;
+  }
+
+  .focus-scheduled-form {
+    grid-template-columns: 1fr;
+  }
+
+  .focus-scheduled-item {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .focus-scheduled-actions {
+    grid-column: 2;
+    flex-wrap: wrap;
+  }
+
+  .calendar-page-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 480px) {
+  .today-timeline-card,
+  .focus-scheduled-card {
+    padding: 14px;
+  }
+
+  .today-timeline-item {
+    grid-template-columns: 68px 22px minmax(0, 1fr);
+    gap: 7px;
+  }
+
+  .today-timeline-item small {
+    grid-column: 3;
+    margin-top: -5px;
+  }
+}
+
+.smart-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.smart-overview-stat {
+  display: grid;
+  gap: 3px;
+  padding: 15px 17px;
+}
+
+.smart-overview-stat > span,
+.smart-free-slots > span:first-child {
+  color: #777870;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.smart-overview-stat strong {
+  color: #343531;
+  font-size: 25px;
+  line-height: 1.2;
+}
+
+.smart-overview-stat small,
+.smart-section-heading p {
+  color: #96978f;
+  font-size: 12px;
+}
+
+.smart-week-card,
+.smart-recommendations {
+  margin-bottom: 14px;
+  padding: 18px 20px;
+}
+
+.smart-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+
+.smart-section-heading h2 {
+  margin: 0;
+  color: #383934;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.smart-section-heading p {
+  margin: 4px 0 0;
+}
+
+.smart-day {
+  padding: 13px 0;
+  border-top: 1px solid #efefeb;
+}
+
+.smart-day-heading,
+.smart-day-heading > div:first-child,
+.smart-day-badges,
+.smart-free-slots {
+  display: flex;
+  align-items: center;
+}
+
+.smart-day-heading {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.smart-day-heading > div:first-child {
+  align-items: baseline;
+  gap: 10px;
+}
+
+.smart-day-heading strong,
+.smart-recommendation-copy strong {
+  color: #41423c;
+  font-size: 13px;
+}
+
+.smart-day-heading > div:first-child span {
+  color: #92938c;
+  font-size: 12px;
+}
+
+.smart-day-badges {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.smart-badge {
+  padding: 4px 8px;
+  border-radius: 20px;
+  color: #6b7066;
+  background: #f0f3ef;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.smart-badge-warning {
+  color: #9c6842;
+  background: #fff1df;
+}
+
+.smart-badge-conflict {
+  color: #a64e43;
+  background: #fff0ed;
+}
+
+.smart-conflict-list {
+  display: grid;
+  gap: 5px;
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: #8d554a;
+  font-size: 12px;
+}
+
+.smart-conflict-list strong {
+  color: #74463e;
+}
+
+.smart-free-slots {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.smart-free-slots > span:first-child {
+  margin-right: 3px;
+}
+
+.smart-free-slot {
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: #587d62;
+  background: #edf5ee;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.smart-no-free-slot,
+.smart-empty-state {
+  color: #92938c;
+  font-size: 12px;
+}
+
+.smart-recommendation-list {
+  display: grid;
+}
+
+.smart-recommendation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 13px 0;
+  border-top: 1px solid #efefeb;
+}
+
+.smart-recommendation-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.smart-recommendation-copy span,
+.smart-recommendation-copy small {
+  color: #85867f;
+  font-size: 12px;
+}
+
+.smart-recommendation-copy small {
+  color: #a06e4c;
+}
+
+.smart-recommendation .primary-button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 11px;
+  font-size: 12px;
+}
+
+.smart-empty-state {
+  padding: 12px 0 3px;
+  border-top: 1px solid #efefeb;
+  line-height: 1.6;
+}
+
+.app-shell[data-theme="dark"] .smart-day,
+.app-shell[data-theme="dark"] .smart-recommendation,
+.app-shell[data-theme="dark"] .smart-empty-state {
+  border-color: #343b3a;
+}
+
+.app-shell[data-theme="dark"] .smart-badge {
+  color: #c5d0ca;
+  background: #303b37;
+}
+
+.app-shell[data-theme="dark"] .smart-badge-warning {
+  color: #f0c49c;
+  background: #493a2d;
+}
+
+.app-shell[data-theme="dark"] .smart-badge-conflict {
+  color: #f0aaa0;
+  background: #482e2b;
+}
+
+.app-shell[data-theme="dark"] .smart-free-slot {
+  color: #aed0b3;
+  background: #2e3c32;
+}
+
+.app-shell[data-theme="dark"] .smart-conflict-list,
+.app-shell[data-theme="dark"] .smart-conflict-list strong,
+.app-shell[data-theme="dark"] .smart-recommendation-copy small {
+  color: #e4a69b;
+}
+
+@media (max-width: 700px) {
+  .smart-overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .smart-overview-stat {
+    grid-template-columns: 1fr auto;
+    align-items: center;
+  }
+
+  .smart-overview-stat strong {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .smart-week-card,
+  .smart-recommendations {
+    padding: 15px;
+  }
+
+  .smart-day-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 480px) {
+  .smart-recommendation {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

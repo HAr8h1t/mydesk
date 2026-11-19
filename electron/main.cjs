@@ -384,6 +384,7 @@ async function getExportData(kind) {
     notes: await exportNotesWithFiles(noteStore.list()),
     events,
     focusSessions: focusStore.exportAll(),
+    scheduledFocusBlocks: focusStore.exportScheduled(),
     settings,
   }
 }
@@ -537,6 +538,9 @@ registerIpcHandler('settings:save', (_event, key, value) => {
   return saved
 })
 registerIpcHandler('focus:active', () => focusStore.active())
+registerIpcHandler('focus:scheduled', () => focusStore.scheduled())
+registerIpcHandler('focus:save-scheduled', (_event, block) => focusStore.saveScheduled(block))
+registerIpcHandler('focus:delete-scheduled', (_event, id) => focusStore.deleteScheduled(id))
 registerIpcHandler('focus:start', (_event, session) => {
   const started = focusStore.start(session)
   focusScheduler.refresh()

@@ -44,16 +44,15 @@ class BackupScheduler {
     const now = new Date()
     const today = dateStamp(now)
     const lastDate = settings.lastAutoBackupAt ? dateStamp(new Date(settings.lastAutoBackupAt)) : ''
-    const scheduledToday = new Date(now)
-    scheduledToday.setHours(2, 0, 0, 0)
     let nextAt
     if (this.retryAt > now.getTime()) {
       nextAt = new Date(this.retryAt)
-    } else if (lastDate !== today && now > scheduledToday) {
+    } else if (lastDate !== today && (now.getHours() > 2 || (now.getHours() === 2 && now.getMinutes() > 0))) {
       nextAt = new Date(now.getTime() + 30_000)
     } else {
-      nextAt = scheduledToday
-      if (nextAt < now || lastDate === today) nextAt.setDate(nextAt.getDate() + 1)
+      nextAt = new Date(now)
+      nextAt.setHours(2, 0, 0, 0)
+      if (nextAt <= now || lastDate === today) nextAt.setDate(nextAt.getDate() + 1)
     }
     this.timer = setTimeout(() => this.run(), Math.min(maxTimerDelay, Math.max(0, nextAt.getTime() - now.getTime())))
   }

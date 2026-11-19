@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import { getScheduleOverview } from './services/scheduling.js'
 
 const initialTasks = [
   { id: 'task-1', title: 'Review weekly priorities', done: false },
@@ -36,6 +37,7 @@ const initialNotes = [
 const navigation = [
   { label: 'Dashboard', icon: 'home' },
   { label: 'Timeline', icon: 'clock' },
+  { label: 'Smart Schedule', icon: 'spark' },
   { label: 'Focus', icon: 'clock' },
   { label: 'Calendar', icon: 'calendar' },
   { label: 'Tasks', icon: 'check' },
@@ -129,6 +131,13 @@ function formatTime(value) {
   const [hours, minutes] = value.split(':').map(Number)
   return new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' })
     .format(new Date(2000, 0, 1, hours, minutes))
+}
+
+function formatDateTimeCompact(value) {
+  const date = new Date(value)
+  return Number.isFinite(date.getTime())
+    ? new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date)
+    : ''
 }
 
 function createId() {
@@ -574,6 +583,7 @@ function App() {
     return [...imported, ...storedContent.reminders]
   })
   const [activeView, setActiveView] = useState('Dashboard')
+  const [timelineInitialDate, setTimelineInitialDate] = useState('')
   const [theme, setTheme] = useState(() => readStorage('mydesk-theme', 'warm'))
   const [settingsReady, setSettingsReady] = useState(() => !window.mydesk?.settings)
   const [settingsError, setSettingsError] = useState('')
@@ -1196,6 +1206,7 @@ function App() {
       ? current.map(item => item.id === alarm.id ? alarm : item)
       : [alarm, ...current])
     setAlarmProfiles(current => [...new Set([...current, alarm.profile || 'General'])])
+    setAlarmError('')
   }
 
   async function changeAlarm(id, action, value) {
@@ -1212,6 +1223,7 @@ function App() {
         })()
       if (updated) setAlarms(current => current.map(item => item.id === id ? updated : item))
       if (action === 'dismiss' || action === 'snooze') setActiveAlarm(null)
+      setAlarmError('')
       if (database) {
         const latest = await database.load()
         setAlarmHistory(latest.history)
@@ -1224,6 +1236,7 @@ function App() {
   function deleteAlarm(id) {
     window.mydesk?.alarms?.delete(id).then(() => {
       setAlarms(current => current.filter(alarm => alarm.id !== id))
+      setAlarmError('')
     }).catch(error => {
       setAlarmError(`The alarm could not be deleted: ${error.message}`)
     })
@@ -1450,6 +1463,9 @@ function App() {
               notes={notes}
               completedTasks={completedTasks}
               activeTasks={activeTasks}
+              events={events}
+              reminders={reminders}
+              alarms={alarms}
               onNavigate={setActiveView}
               onToggleTask={toggleTask}
               onOpenNote={id => {
@@ -1474,12 +1490,16 @@ function App() {
               onUpdateTask={updateTask}
               onToggleTask={toggleTask}
               onDeleteTask={deleteTask}
-              onScheduleTask={scheduleTask}
+              onOpenAssistant={() => setActiveView('Smart Schedule')}
             />
           )}
 
           {activeView === 'Timeline' && (
-            <TimelinePage tasks={tasks} events={events} notes={notes} reminders={reminders} alarmHistory={alarmHistory} focusRevision={focusRevision} />
+            <TimelinePage tasks={tasks} events={events} notes={notes} reminders={reminders} alarmHistory={alarmHistory} focusRevision={focusRevision} initialDate={timelineInitialDate} />
+          )}
+
+          {activeView === 'Smart Schedule' && (
+            <SmartSchedulePage tasks={tasks} events={events} onScheduleTask={scheduleTask} />
           )}
 
           {activeView === 'Focus' && (
@@ -1509,8 +1529,13 @@ function App() {
             <CalendarPage
               events={events}
               tasks={tasks}
+              reminders={reminders}
               onSaveEvent={saveEvent}
               onDeleteEvent={deleteEvent}
+              onOpenTimeline={date => {
+                setTimelineInitialDate(date)
+                setActiveView('Timeline')
+              }}
               onMoveItem={(item, date) => {
                 if (item.type === 'task') {
                   const key = item.calendarKind === 'scheduled' ? 'startDate' : 'dueDate'
@@ -1578,7 +1603,7 @@ function App() {
             />
           )}
 
-          {!['Dashboard', 'Tasks', 'Timeline', 'Focus', 'Calendar', 'Reminders', 'Notes', 'Alarms', 'Settings'].includes(activeView) && (
+          {!['Dashboard', 'Tasks', 'Timeline', 'Smart Schedule', 'Focus', 'Calendar', 'Reminders', 'Notes', 'Alarms', 'Settings'].includes(activeView) && (
             <ComingSoonPage title={activeView} />
           )}
         </div>
@@ -1594,16 +1619,71 @@ function App() {
   )
 }
 
-function Dashboard({ greeting, tasks, notes, completedTasks, activeTasks, onNavigate, onToggleTask, onOpenNote, onCreateNote }) {
-  const openTasks = tasks.filter(task => !task.done).slice(0, 3)
-  const progress = tasks.length ? Math.round((completedTasks / tasks.length) * 100) : 0
+function Dashboard({ greeting, tasks, notes, completedTasks, activeTasks, events, reminders, alarms, onNavigate, onToggleTask, onOpenNote, onCreateNote }) {
+  const [now] = useState(() => new Date())
+  const today = dateKey(now)
+  const currentTime = localTimeKey(now.toISOString())
+  const scheduledTodayTasks = tasks.filter(task => (
+    (task.startDate === today || task.dueDate === today || localDateKey(task.completedAt) === today)
+  ))
+  const todayTasks = scheduledTodayTasks.length
+    ? scheduledTodayTasks
+    : tasks.filter(task => !task.startDate && !task.dueDate)
+  const openTasks = todayTasks.filter(task => displayTaskStatus(task, today) !== 'completed').slice(0, 3)
+  const completedToday = todayTasks.filter(task => displayTaskStatus(task, today) === 'completed').length
+  const progress = todayTasks.length ? Math.round((completedToday / todayTasks.length) * 100) : 0
+  const todayEvents = events.filter(event => eventOccursOnDate(event, today))
+    .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''))
+  const upcomingEvents = todayEvents.filter(event => !event.startTime || event.startTime >= currentTime).slice(0, 3)
+  const pendingReminders = reminders.filter(reminder => (
+    reminder.status === 'active'
+    && localDateKey(reminder.nextAt || reminder.scheduledAt) === today
+  )).sort((a, b) => (a.nextAt || a.scheduledAt).localeCompare(b.nextAt || b.scheduledAt)).slice(0, 3)
+  const upcomingAlarms = alarms.filter(alarm => alarm.enabled && Date.parse(alarm.nextAt) > now.getTime())
+    .sort((a, b) => a.nextAt.localeCompare(b.nextAt))
+    .slice(0, 3)
+  const activeGoals = [...new Set(tasks
+    .filter(task => displayTaskStatus(task, today) !== 'completed' && task.goal?.trim())
+    .map(task => task.goal.trim()))]
+  const dayActivities = [
+    ...todayEvents.map(event => ({
+      id: `event-${event.id}`,
+      title: event.title,
+      time: event.startTime ? formatTime(event.startTime) : 'Any time',
+      sortTime: event.startTime || '00:00',
+      kind: 'event',
+    })),
+    ...todayTasks.map(task => ({
+      id: `task-${task.id}`,
+      title: task.title,
+      time: task.startDate === today && task.startTime ? formatTime(task.startTime) : 'Any time',
+      sortTime: task.startDate === today ? task.startTime || '09:00' : task.dueDate === today ? '23:59' : '09:00',
+      kind: 'task',
+      done: displayTaskStatus(task, today) === 'completed',
+    })),
+    ...pendingReminders.map(reminder => ({
+      id: `reminder-${reminder.id}`,
+      title: reminder.title,
+      time: formatClock(reminder.nextAt || reminder.scheduledAt),
+      sortTime: localTimeKey(reminder.nextAt || reminder.scheduledAt),
+      kind: 'reminder',
+    })),
+    ...alarms.filter(alarm => alarm.enabled && localDateKey(alarm.nextAt) === today).map(alarm => ({
+      id: `alarm-${alarm.id}`,
+      title: alarm.label,
+      time: formatClock(alarm.nextAt),
+      sortTime: localTimeKey(alarm.nextAt),
+      kind: 'alarm',
+    })),
+  ].sort((a, b) => a.sortTime.localeCompare(b.sortTime))
+  const greetingText = now.getHours() < 12 ? 'Good morning' : now.getHours() < 18 ? 'Good afternoon' : 'Good evening'
 
   return (
     <>
       <section className="welcome-row">
         <div>
           <p className="eyebrow">YOUR DAY, AT A GLANCE</p>
-          <h1>Good things start here<span>.</span></h1>
+          <h1>{greetingText}<span>.</span></h1>
           <p className="welcome-subtitle">A little structure for a more thoughtful day.</p>
         </div>
         <div className="date-pill"><Icon name="calendar" size={16} /> {greeting}</div>
@@ -1630,7 +1710,7 @@ function Dashboard({ greeting, tasks, notes, completedTasks, activeTasks, onNavi
           <div className="focus-check"><Icon name="check" size={22} /></div>
         </div>
         <div className="focus-progress">
-          <div className="progress-caption"><span>TODAY’S PROGRESS</span><strong>{completedTasks} of {tasks.length} done</strong></div>
+          <div className="progress-caption"><span>TODAY’S PROGRESS</span><strong>{completedToday} of {todayTasks.length} done</strong></div>
           <div className="progress-track"><div className="progress-value" style={{ width: `${progress}%` }} /></div>
         </div>
       </section>
@@ -1641,10 +1721,46 @@ function Dashboard({ greeting, tasks, notes, completedTasks, activeTasks, onNavi
         <SummaryCard icon="note" label="Your notes" value={notes.length} detail="ideas saved" color="lavender" />
       </section>
 
+      <section className="today-timeline-card surface-card">
+        <div className="section-heading">
+          <div><p className="eyebrow">SCROLL THROUGH YOUR DAY</p><h2>Today’s timeline</h2></div>
+          <button type="button" className="text-link" onClick={() => onNavigate('Calendar')}>Open calendar <Icon name="arrow" size={15} /></button>
+        </div>
+        <div className="today-timeline-scroll">
+          {dayActivities.length ? dayActivities.map(activity => (
+            <article className={`today-timeline-item today-timeline-${activity.kind} ${activity.done ? 'today-timeline-done' : ''}`} key={activity.id}>
+              <time>{activity.time}</time>
+              <span className="today-timeline-marker"><Icon name={activity.kind === 'task' ? 'check' : activity.kind === 'event' ? 'calendar' : activity.kind === 'reminder' ? 'bell' : 'clock'} size={15} /></span>
+              <strong>{activity.title}</strong>
+              <small>{activity.kind}</small>
+            </article>
+          )) : <div className="today-dashboard-empty">Nothing planned for today yet. Add an event, task, reminder, or alarm to build your timeline.</div>}
+        </div>
+      </section>
+
+      <section className="today-dashboard-widgets" aria-label="Today's overview">
+        <article className="surface-card today-widget">
+          <div className="section-heading"><div><p className="eyebrow">UP NEXT</p><h2>Events</h2></div><Icon name="calendar" size={17} /></div>
+          {upcomingEvents.length ? upcomingEvents.map(event => <div className="today-widget-row" key={event.id}><strong>{event.title}</strong><span>{event.startTime ? formatTime(event.startTime) : 'All day'}</span></div>) : <p className="today-dashboard-empty">No upcoming events today.</p>}
+        </article>
+        <article className="surface-card today-widget">
+          <div className="section-heading"><div><p className="eyebrow">DON’T FORGET</p><h2>Reminders</h2></div><Icon name="bell" size={17} /></div>
+          {pendingReminders.length ? pendingReminders.map(reminder => <div className="today-widget-row" key={reminder.id}><strong>{reminder.title}</strong><span>{formatClock(reminder.nextAt || reminder.scheduledAt)}</span></div>) : <p className="today-dashboard-empty">No pending reminders today.</p>}
+        </article>
+        <article className="surface-card today-widget">
+          <div className="section-heading"><div><p className="eyebrow">KEEP MOVING</p><h2>Active goals</h2></div><Icon name="spark" size={17} /></div>
+          {activeGoals.length ? activeGoals.slice(0, 3).map(goal => <div className="today-widget-row" key={goal}><strong>{goal}</strong><span>{tasks.filter(task => task.goal?.trim() === goal && displayTaskStatus(task, today) !== 'completed').length} tasks</span></div>) : <p className="today-dashboard-empty">Add a goal to one of your tasks to see it here.</p>}
+        </article>
+        <article className="surface-card today-widget">
+          <div className="section-heading"><div><p className="eyebrow">COMING UP</p><h2>Alarms</h2></div><Icon name="clock" size={17} /></div>
+          {upcomingAlarms.length ? upcomingAlarms.map(alarm => <div className="today-widget-row" key={alarm.id}><strong>{alarm.label}</strong><span>{formatDateTimeCompact(alarm.nextAt)}</span></div>) : <p className="today-dashboard-empty">No alarms are currently set.</p>}
+        </article>
+      </section>
+
       <section className="dashboard-grid">
         <div className="surface-card task-preview">
           <div className="section-heading">
-            <div><p className="eyebrow">KEEP THE MOMENTUM</p><h2>Up next</h2></div>
+            <div><p className="eyebrow">KEEP THE MOMENTUM</p><h2>Today’s tasks</h2></div>
             <button type="button" className="text-link" onClick={() => onNavigate('Tasks')}>All tasks <Icon name="arrow" size={15} /></button>
           </div>
           {openTasks.length ? (
@@ -1654,14 +1770,14 @@ function Dashboard({ greeting, tasks, notes, completedTasks, activeTasks, onNavi
               ))}
             </div>
           ) : (
-            <div className="empty-mini"><span className="empty-check"><Icon name="check" size={18} /></span><div><strong>All caught up</strong><span>You’ve cleared your task list.</span></div></div>
+            <div className="empty-mini"><span className="empty-check"><Icon name="check" size={18} /></span><div><strong>No tasks planned today</strong><span>Schedule or set a due date to see them here.</span></div></div>
           )}
           <button type="button" className="add-inline" onClick={() => onNavigate('Tasks')}><Icon name="plus" size={17} /> Add a task</button>
         </div>
 
         <div className="surface-card notes-preview">
           <div className="section-heading">
-            <div><p className="eyebrow">THOUGHTS & IDEAS</p><h2>Recent notes</h2></div>
+            <div><p className="eyebrow">THOUGHTS & IDEAS</p><h2>Quick notes</h2></div>
             <button type="button" className="icon-button" aria-label="Create a note" onClick={onCreateNote}><Icon name="plus" size={18} /></button>
           </div>
           {notes.length ? notes.slice(0, 2).map((note, index) => (
@@ -1710,40 +1826,100 @@ function TaskRow({ task, onToggle, onDelete }) {
   )
 }
 
-function getSmartSuggestion(tasks, events) {
-  const tomorrow = dateKey(addDays(parseDateKey(dateKey(new Date())), 1))
-  const priorityRank = { Urgent: 4, High: 3, Medium: 2, Low: 1 }
-  const candidates = tasks.filter(task => (
-    displayTaskStatus(task) === 'pending'
-    && !task.startDate
-    && (!task.dueDate || task.dueDate >= tomorrow)
-    && Number(task.estimatedMinutes || 60) <= 60
-    && task.dependencies.every(id => tasks.some(dep => dep.id === id && displayTaskStatus(dep) === 'completed'))
-  )).sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority])
-  if (!candidates.length) return null
-
-  const busySlots = [
-    ...events.filter(event => eventOccursOnDate(event, tomorrow)).map(event => ({
-      start: timeToMinutes(event.startTime),
-      end: timeToMinutes(event.endTime),
-    })),
-    ...tasks.filter(task => task.startDate === tomorrow && task.startTime).map(task => ({
-      start: timeToMinutes(task.startTime),
-      end: timeToMinutes(task.startTime) + Number(task.estimatedMinutes || 60),
-    })),
-  ]
-  for (let start = 9 * 60; start + 60 <= 17 * 60; start += 30) {
-    if (!busySlots.some(slot => start < slot.end && slot.start < start + 60)) {
-      return { task: candidates[0], date: tomorrow, startTime: minutesToTime(start) }
-    }
-  }
-  return null
+function formatScheduleDuration(minutes) {
+  const hours = Math.floor(minutes / 60)
+  const remainder = minutes % 60
+  if (!hours) return `${remainder} min`
+  return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`
 }
 
-function TasksPage({ tasks, allTasks, events, taskFilter, taskSearch, taskActionError, setTaskFilter, setTaskSearch, onSaveTask, onUpdateTask, onToggleTask, onDeleteTask, onScheduleTask }) {
+function SmartSchedulePage({ tasks, events, onScheduleTask }) {
+  const [now] = useState(() => new Date())
+  const { days, recommendations } = getScheduleOverview(tasks, events, {
+    startDate: dateKey(now),
+    now,
+  })
+  const conflictCount = days.reduce((total, day) => total + day.conflicts.length, 0)
+  const overloadedCount = days.filter(day => day.overloaded).length
+  const unscheduledCount = tasks.filter(task => displayTaskStatus(task) === 'pending' && !task.startDate).length
+
+  return (
+    <>
+      <section className="page-title-row">
+        <div><p className="eyebrow">PLAN WITH CLARITY</p><h1>Smart schedule<span>.</span></h1><p className="welcome-subtitle">A practical look at the next seven days, using your priorities and available time.</p></div>
+      </section>
+
+      <section className="smart-overview-grid" aria-label="Schedule summary">
+        <article className="surface-card smart-overview-stat"><span>Overlaps</span><strong>{conflictCount}</strong><small>activities at the same time</small></article>
+        <article className="surface-card smart-overview-stat"><span>Overloaded days</span><strong>{overloadedCount}</strong><small>six or more scheduled hours</small></article>
+        <article className="surface-card smart-overview-stat"><span>Unscheduled tasks</span><strong>{unscheduledCount}</strong><small>pending tasks without a time</small></article>
+      </section>
+
+      <section className="surface-card smart-week-card">
+        <div className="smart-section-heading"><div><h2>Next seven days</h2><p>Workload counts scheduled tasks and events.</p></div></div>
+        <div className="smart-day-list">
+          {days.map(day => (
+            <article className="smart-day" key={day.date}>
+              <div className="smart-day-heading">
+                <div><strong>{formatDate(parseDateKey(day.date))}</strong><span>{formatScheduleDuration(day.workloadMinutes)} scheduled</span></div>
+                <div className="smart-day-badges">
+                  {day.overloaded && <span className="smart-badge smart-badge-warning">Overloaded</span>}
+                  {day.conflicts.length > 0 && <span className="smart-badge smart-badge-conflict">{day.conflicts.length} {day.conflicts.length === 1 ? 'overlap' : 'overlaps'}</span>}
+                  {!day.overloaded && day.conflicts.length === 0 && <span className="smart-badge">On track</span>}
+                </div>
+              </div>
+              {day.conflicts.length > 0 && (
+                <ul className="smart-conflict-list">
+                  {day.conflicts.map(({ first, second }) => (
+                    <li key={`${first.type}-${first.id}-${second.type}-${second.id}`}>
+                      <strong>{first.title}</strong> overlaps <strong>{second.title}</strong>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="smart-free-slots">
+                <span>Free windows</span>
+                {day.freeSlots.length
+                  ? day.freeSlots.slice(0, 3).map(slot => (
+                    <span className="smart-free-slot" key={`${slot.start}-${slot.end}`}>
+                      {formatTime(minutesToTime(slot.start))}–{formatTime(minutesToTime(slot.end))}
+                    </span>
+                  ))
+                  : <span className="smart-no-free-slot">No 15-minute window during 9–5.</span>}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="surface-card smart-recommendations">
+        <div className="smart-section-heading"><div><h2>Suggested adjustments</h2><p>Suggestions account for task duration, priority, deadlines and dependencies.</p></div></div>
+        {recommendations.length ? (
+          <div className="smart-recommendation-list">
+            {recommendations.map(item => (
+              <article className="smart-recommendation" key={`${item.task.id}-${item.date}`}>
+                <div className="smart-recommendation-copy">
+                  <strong>{item.task.title}</strong>
+                  <span>{formatDate(parseDateKey(item.date))} · {formatTime(minutesToTime(item.start))}–{formatTime(minutesToTime(item.end))} · {formatScheduleDuration(item.end - item.start)}</span>
+                  <small>{item.reason}</small>
+                </div>
+                <button type="button" className="primary-button" onClick={() => onScheduleTask(item.task.id, item.date, minutesToTime(item.start))}>
+                  {item.reason.startsWith('Reschedule') ? 'Reschedule' : 'Schedule'}
+                </button>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="smart-empty-state">No suitable changes found for the next seven days. Your scheduled tasks may already fit, or deadlines and dependencies may limit available options.</div>
+        )}
+      </section>
+    </>
+  )
+}
+
+function TasksPage({ tasks, allTasks, events, taskFilter, taskSearch, taskActionError, setTaskFilter, setTaskSearch, onSaveTask, onUpdateTask, onToggleTask, onDeleteTask, onOpenAssistant }) {
   const [formOpen, setFormOpen] = useState(false)
   const [editingTask, setEditingTask] = useState(null)
-  const [suggestion, setSuggestion] = useState(null)
 
   function openTaskForm(task = null) {
     setEditingTask(task)
@@ -1752,10 +1928,6 @@ function TasksPage({ tasks, allTasks, events, taskFilter, taskSearch, taskAction
 
   function submitTask(task) {
     if (onSaveTask(task)) setFormOpen(false)
-  }
-
-  function showSuggestion() {
-    setSuggestion(getSmartSuggestion(allTasks, events))
   }
 
   return (
@@ -1769,16 +1941,9 @@ function TasksPage({ tasks, allTasks, events, taskFilter, taskSearch, taskAction
         <span className="smart-schedule-icon"><Icon name="spark" size={18} /></span>
         <div className="smart-schedule-copy">
           <strong>Smart scheduling</strong>
-          <span>Find a free hour tomorrow for a task that fits.</span>
-          {suggestion && (
-            <div className="smart-schedule-result">
-              {suggestion.task
-                ? <><span><b>{suggestion.task.title}</b> · {formatDate(parseDateKey(suggestion.date))} at {formatTime(suggestion.startTime)}</span><button type="button" className="primary-button" onClick={() => { onScheduleTask(suggestion.task.id, suggestion.date, suggestion.startTime); setSuggestion(null) }}>Schedule task</button></>
-                : <span>No suitable task or free hour found for tomorrow.</span>}
-            </div>
-          )}
+          <span>Check for overlaps, busy days and a better time for pending tasks.</span>
         </div>
-        <button type="button" className="calendar-today smart-schedule-button" onClick={showSuggestion}>Suggest a time</button>
+        <button type="button" className="calendar-today smart-schedule-button" onClick={onOpenAssistant}>Open assistant</button>
       </section>
 
       <section className="surface-card task-list-card task-manager-card">
@@ -2081,10 +2246,35 @@ function FocusPage({ tasks, activeSession, onStart, onFinish, onRecordManual }) 
   const [manualSaving, setManualSaving] = useState(false)
   const [manualFormError, setManualFormError] = useState('')
   const [revision, setRevision] = useState(0)
+  const [scheduledBlocks, setScheduledBlocks] = useState(() => {
+    const saved = readStorage('mydesk-focus-schedule', [])
+    return Array.isArray(saved) ? saved : []
+  })
+  const [scheduledReady, setScheduledReady] = useState(() => !window.mydesk?.focus?.scheduled)
+  const [scheduledError, setScheduledError] = useState('')
+  const [scheduledDraft, setScheduledDraft] = useState(null)
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    const database = window.mydesk?.focus
+    if (!database?.scheduled) return undefined
+    let active = true
+    database.scheduled().then(saved => {
+      if (!active) return
+      setScheduledBlocks(saved)
+      setScheduledReady(true)
+      setScheduledError('')
+    }).catch(error => {
+      if (active) {
+        setScheduledReady(true)
+        setScheduledError(`Scheduled focus sessions could not be loaded: ${error.message}`)
+      }
+    })
+    return () => { active = false }
   }, [])
 
   useEffect(() => {
@@ -2134,6 +2324,82 @@ function FocusPage({ tasks, activeSession, onStart, onFinish, onRecordManual }) 
       category: task?.category || 'Personal',
     })
     if (started) setRevision(value => value + 1)
+  }
+
+  async function saveScheduledBlock(event) {
+    event.preventDefault()
+    const scheduledAt = new Date(scheduledDraft.scheduledAt)
+    if (!Number.isFinite(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now()) {
+      setScheduledError('Choose a future date and time for this focus session.')
+      return
+    }
+    const task = tasks.find(item => item.id === scheduledDraft.taskId)
+    const block = {
+      ...scheduledDraft,
+      id: scheduledDraft.id || createId(),
+      mode: 'focus',
+      targetMinutes: Number(scheduledDraft.targetMinutes),
+      taskId: task?.id || '',
+      taskTitle: task?.title || '',
+      category: task?.category || 'Personal',
+      scheduledAt: scheduledAt.toISOString(),
+    }
+    try {
+      const saved = window.mydesk?.focus?.saveScheduled
+        ? await window.mydesk.focus.saveScheduled(block)
+        : block
+      setScheduledBlocks(current => [
+        saved,
+        ...current.filter(item => item.id !== saved.id),
+      ].sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt)))
+      if (!window.mydesk?.focus?.saveScheduled) {
+        localStorage.setItem('mydesk-focus-schedule', JSON.stringify([
+          saved,
+          ...scheduledBlocks.filter(item => item.id !== saved.id),
+        ]))
+      }
+      setScheduledDraft(null)
+      setScheduledError('')
+    } catch (error) {
+      setScheduledError(`The focus session could not be saved: ${error.message}`)
+    }
+  }
+
+  function editScheduledBlock(block) {
+    setScheduledDraft({
+      ...block,
+      scheduledAt: localDateTimeValue(new Date(block.scheduledAt)),
+    })
+  }
+
+  async function deleteScheduledBlock(id) {
+    try {
+      if (window.mydesk?.focus?.deleteScheduled) await window.mydesk.focus.deleteScheduled(id)
+      const remaining = scheduledBlocks.filter(item => item.id !== id)
+      setScheduledBlocks(remaining)
+      if (!window.mydesk?.focus?.deleteScheduled) {
+        localStorage.setItem('mydesk-focus-schedule', JSON.stringify(remaining))
+      }
+      setScheduledError('')
+    } catch (error) {
+      setScheduledError(`The focus session could not be deleted: ${error.message}`)
+    }
+  }
+
+  async function startScheduledBlock(block) {
+    const task = tasks.find(item => item.id === block.taskId)
+    const started = await onStart({
+      id: createId(),
+      mode: 'focus',
+      targetMinutes: block.targetMinutes,
+      taskId: task?.id || '',
+      taskTitle: task?.title || block.taskTitle || '',
+      category: task?.category || block.category || 'Personal',
+    })
+    if (started) {
+      await deleteScheduledBlock(block.id)
+      setRevision(value => value + 1)
+    }
   }
 
   async function submitManual(event) {
@@ -2218,6 +2484,52 @@ function FocusPage({ tasks, activeSession, onStart, onFinish, onRecordManual }) 
             {!weeklySummary.byCategory.length && <p className="focus-empty">Completed focus sessions will appear here.</p>}
           </div>
         </article>
+      </section>
+
+      <section className="focus-scheduled-card surface-card">
+        <div className="section-heading">
+          <div><p className="eyebrow">PLAN AHEAD</p><h2>Scheduled focus</h2></div>
+          <button type="button" className="calendar-today" onClick={() => setScheduledDraft({
+            id: '',
+            mode: 'focus',
+            targetMinutes: 25,
+            taskId: '',
+            scheduledAt: localDateTimeValue(new Date(now + 60 * 60_000)),
+          })}><Icon name="plus" size={15} /> New session</button>
+        </div>
+        <p className="focus-scheduled-description">Save a future focus block, then start, edit, or remove it when plans change.</p>
+        {scheduledError && <p className="task-form-error" role="alert">{scheduledError}</p>}
+        {scheduledDraft && (
+          <form className="focus-scheduled-form" onSubmit={saveScheduledBlock}>
+            <label className="task-form-field"><span>Start date and time</span><input type="datetime-local" min={localDateTimeValue(new Date(now))} value={scheduledDraft.scheduledAt} onChange={event => setScheduledDraft(current => ({ ...current, scheduledAt: event.target.value }))} required /></label>
+            <label className="task-form-field"><span>Duration</span><select value={scheduledDraft.targetMinutes} onChange={event => setScheduledDraft(current => ({ ...current, targetMinutes: Number(event.target.value) }))}>{[5, 10, 15, 25, 30, 45, 60, 90, 120, 240].map(value => <option value={value} key={value}>{value} minutes</option>)}</select></label>
+            <label className="task-form-field"><span>Link a task</span><select value={scheduledDraft.taskId} onChange={event => setScheduledDraft(current => ({ ...current, taskId: event.target.value }))}><option value="">No task</option>{tasks.map(task => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
+            <div className="focus-scheduled-form-actions"><button type="button" className="calendar-today" onClick={() => setScheduledDraft(null)}>Cancel</button><button type="submit" className="primary-button">{scheduledDraft.id ? 'Save changes' : 'Save session'}</button></div>
+          </form>
+        )}
+        {scheduledReady ? scheduledBlocks.length ? (
+          <div className="focus-scheduled-list">
+            {scheduledBlocks.map(block => {
+              const startsAt = new Date(block.scheduledAt)
+              const isPast = startsAt.getTime() <= now
+              return (
+                <article className="focus-scheduled-item" key={block.id}>
+                  <span className="focus-scheduled-icon"><Icon name="clock" size={18} /></span>
+                  <div className="focus-scheduled-copy">
+                    <strong>{block.taskTitle || 'Focus session'}</strong>
+                    <span>{new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(startsAt)} · {block.targetMinutes} min</span>
+                  </div>
+                  <div className="focus-scheduled-actions">
+                    <button type="button" className="primary-button" disabled={Boolean(activeSession)} onClick={() => startScheduledBlock(block)}>Start</button>
+                    <button type="button" className="calendar-today" onClick={() => editScheduledBlock(block)}>Edit</button>
+                    <button type="button" className="icon-button" aria-label={`Delete ${block.taskTitle || 'focus session'}`} onClick={() => deleteScheduledBlock(block.id)}><Icon name="trash" size={15} /></button>
+                  </div>
+                  {isPast && <span className="focus-scheduled-status">Past · start now or update the time</span>}
+                </article>
+              )
+            })}
+          </div>
+        ) : <p className="focus-empty">Your saved focus blocks will appear here.</p> : <p className="focus-empty">Loading scheduled sessions…</p>}
       </section>
 
       <section className="focus-manual-card surface-card">
@@ -2360,8 +2672,8 @@ function SettingsPage({ theme, onSaveSetting, autoBackupEnabled, backupDirectory
   )
 }
 
-function TimelinePage({ tasks, events, notes, reminders, alarmHistory, focusRevision }) {
-  const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date()))
+function TimelinePage({ tasks, events, notes, reminders, alarmHistory, focusRevision, initialDate }) {
+  const [selectedDate, setSelectedDate] = useState(() => initialDate || dateKey(new Date()))
   const [compareDate, setCompareDate] = useState('')
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('all')
@@ -2551,7 +2863,7 @@ function TimelineEntry({ activity }) {
   )
 }
 
-function CalendarPage({ events, tasks, onSaveEvent, onDeleteEvent, onMoveItem, onToggleTask }) {
+function CalendarPage({ events, tasks, reminders, onSaveEvent, onDeleteEvent, onMoveItem, onToggleTask, onOpenTimeline }) {
   const [viewType, setViewType] = useState('Month')
   const [currentDate, setCurrentDate] = useState(() => new Date())
   const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date()))
@@ -2560,6 +2872,7 @@ function CalendarPage({ events, tasks, onSaveEvent, onDeleteEvent, onMoveItem, o
   const [editingId, setEditingId] = useState(null)
   const [draggedItem, setDraggedItem] = useState(null)
   const [eventDraft, setEventDraft] = useState({})
+  const touchStart = useRef(null)
 
   function openEventForm(date = selectedDate, event = null) {
     setEditingId(event?.id ?? null)
@@ -2606,6 +2919,22 @@ function CalendarPage({ events, tasks, onSaveEvent, onDeleteEvent, onMoveItem, o
     setDraggedItem(null)
   }
 
+  function startCalendarSwipe(event) {
+    const touch = event.changedTouches[0]
+    touchStart.current = touch ? { x: touch.clientX, y: touch.clientY } : null
+  }
+
+  function finishCalendarSwipe(event) {
+    const start = touchStart.current
+    const touch = event.changedTouches[0]
+    touchStart.current = null
+    if (!start || !touch) return
+    const deltaX = touch.clientX - start.x
+    const deltaY = touch.clientY - start.y
+    if (Math.abs(deltaX) < 60 || Math.abs(deltaX) < Math.abs(deltaY)) return
+    changeDate(deltaX < 0 ? 1 : -1)
+  }
+
   let visibleDates
   if (viewType === 'Month') {
     const firstOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1)
@@ -2643,7 +2972,17 @@ function CalendarPage({ events, tasks, onSaveEvent, onDeleteEvent, onMoveItem, o
           : '',
       }]
     })
-    return [...eventItems, ...taskItems].sort((a, b) => (
+    const reminderItems = reminders.filter(reminder => (
+      reminder.status !== 'completed'
+      && localDateKey(reminder.nextAt || reminder.scheduledAt) === key
+    )).map(reminder => ({
+      ...reminder,
+      type: 'reminder',
+      occurrenceDate: key,
+      startTime: localTimeKey(reminder.nextAt || reminder.scheduledAt),
+      endTime: '',
+    }))
+    return [...eventItems, ...taskItems, ...reminderItems].sort((a, b) => (
       (a.startTime || '00:00').localeCompare(b.startTime || '00:00')
     ))
   }
@@ -2698,10 +3037,13 @@ function CalendarPage({ events, tasks, onSaveEvent, onDeleteEvent, onMoveItem, o
           <h1>Your calendar<span>.</span></h1>
           <p className="welcome-subtitle">Events and task due dates, together.</p>
         </div>
-        <button type="button" className="primary-button" onClick={() => openEventForm()}><Icon name="plus" size={16} /> New event</button>
+        <div className="calendar-page-actions">
+          <button type="button" className="calendar-today" onClick={() => onOpenTimeline(selectedDate)}>View day timeline</button>
+          <button type="button" className="primary-button" onClick={() => openEventForm()}><Icon name="plus" size={16} /> New event</button>
+        </div>
       </section>
 
-      <section className="surface-card calendar-card">
+      <section className="surface-card calendar-card" onTouchStart={startCalendarSwipe} onTouchEnd={finishCalendarSwipe}>
         <div className="calendar-toolbar">
           <div className="calendar-navigation">
             <button type="button" className="calendar-arrow" aria-label="Previous date range" onClick={() => changeDate(-1)}>‹</button>
@@ -2761,7 +3103,7 @@ function CalendarPage({ events, tasks, onSaveEvent, onDeleteEvent, onMoveItem, o
                     onDrop={() => moveItemToDate(key)}
                     onClick={() => setSelectedDate(key)}
                   >
-                    <button type="button" className="calendar-day-number" onClick={event => { event.stopPropagation(); setSelectedDate(key) }}>{date.getDate()}</button>
+                    <button type="button" className="calendar-day-number" aria-label={`Open timeline for ${key}`} onClick={event => { event.stopPropagation(); onOpenTimeline(key) }}>{date.getDate()}</button>
                     <div className="calendar-day-items">{renderItems(date, true)}</div>
                     <button type="button" className="calendar-add-day" aria-label={`Add event on ${key}`} onClick={event => { event.stopPropagation(); setSelectedDate(key); openEventForm(key) }}>+</button>
                   </div>
@@ -2776,11 +3118,11 @@ function CalendarPage({ events, tasks, onSaveEvent, onDeleteEvent, onMoveItem, o
               const dateItems = itemsForDate(date)
               return (
                 <section key={key} className={`calendar-list-day ${key === todayKey ? 'calendar-list-today' : ''}`} onDragOver={event => event.preventDefault()} onDrop={() => moveItemToDate(key)}>
-                  <div className="calendar-list-date">
+                  <button type="button" className="calendar-list-date" aria-label={`Open timeline for ${key}`} onClick={() => onOpenTimeline(key)}>
                     <span>{new Intl.DateTimeFormat('en', { weekday: 'short' }).format(date)}</span>
                     <strong>{date.getDate()}</strong>
                     <small>{new Intl.DateTimeFormat('en', { month: 'short' }).format(date)}</small>
-                  </div>
+                  </button>
                   <div className="calendar-list-items">
                     {dateItems.length ? renderItems(date) : <span className="calendar-no-events">Nothing scheduled</span>}
                     <button type="button" className="calendar-add-list-event" onClick={() => { setSelectedDate(key); openEventForm(key) }}>+ Add event</button>
@@ -2794,6 +3136,7 @@ function CalendarPage({ events, tasks, onSaveEvent, onDeleteEvent, onMoveItem, o
         <div className="calendar-legend">
           {eventCategories.map(category => <span key={category.name}><i style={{ backgroundColor: category.color }} />{category.name}</span>)}
           <span><i className="task-legend-dot" />Task due</span>
+          <span><i className="reminder-legend-dot" />Reminder</span>
         </div>
       </section>
     </>
@@ -2807,6 +3150,15 @@ function CalendarItem({ item, compact, conflicted, onOpenEvent, onToggleTask, on
         <button type="button" className="calendar-task-check" aria-label={item.done ? `Mark ${item.title} as not done` : `Complete ${item.title}`} onClick={() => onToggleTask(item.id)}>{item.done ? '✓' : ''}</button>
         <span className="calendar-item-title">{item.title}</span>
         {!compact && <><span className="calendar-event-time">{formatTime(item.startTime)}</span><small>{item.calendarKind === 'scheduled' ? 'Scheduled' : 'Due'}</small></>}
+      </div>
+    )
+  }
+  if (item.type === 'reminder') {
+    return (
+      <div className="calendar-item calendar-reminder-item" title={`Reminder: ${item.title}`}>
+        <Icon name="bell" size={12} />
+        <span className="calendar-item-title">{item.title}</span>
+        {!compact && <><span className="calendar-event-time">{formatTime(item.startTime)}</span><small>Reminder</small></>}
       </div>
     )
   }
@@ -2977,17 +3329,17 @@ function NotesPage({
 }
 
 function AlarmsPage({ alarms, profiles, history, onSave, onToggle, onDelete }) {
-  const [today] = useState(() => dateKey(new Date()))
   const [draft, setDraft] = useState(null)
   const [profileDraft, setProfileDraft] = useState('')
   const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
   function createAlarm() {
+    const defaultAt = new Date(Date.now() + 60 * 60_000)
     setDraft({
       id: '',
       label: '',
-      time: '07:00',
-      onceDate: today,
+      time: `${String(defaultAt.getHours()).padStart(2, '0')}:${String(defaultAt.getMinutes()).padStart(2, '0')}`,
+      onceDate: dateKey(defaultAt),
       repeat: 'once',
       days: [1, 2, 3, 4, 5],
       profile: profiles[0] || 'General',
@@ -3021,10 +3373,10 @@ function AlarmsPage({ alarms, profiles, history, onSave, onToggle, onDelete }) {
           {sortedAlarms.map(alarm => (
             <article className={`surface-card alarm-card ${!alarm.enabled ? 'alarm-disabled' : ''}`} key={alarm.id}>
               <div className="alarm-card-main">
-                <div className="alarm-clock-time">{alarm.time}</div>
+                <div className="alarm-clock-time">{formatTime(alarm.time)}</div>
                 <div className="alarm-card-copy"><strong>{alarm.label}</strong><span>{alarm.repeat === 'once' ? `Once · ${formatDate(parseDateKey(alarm.onceDate))}` : alarm.repeat === 'daily' ? 'Every day' : weekdays.filter((_, day) => alarm.days.includes(day)).join(', ')}</span><small>{alarm.profile} · {alarm.sound || 'system'} sound</small></div>
               </div>
-              <label className="alarm-enable"><input type="checkbox" checked={alarm.enabled} onChange={event => onToggle(alarm.id, event.target.checked)} /><span>Enabled</span></label>
+              <button type="button" className={`calendar-today alarm-set-button ${alarm.enabled ? 'alarm-is-set' : ''}`} aria-pressed={alarm.enabled} onClick={() => onToggle(alarm.id, !alarm.enabled)}>{alarm.enabled ? 'Turn off' : 'Set alarm'}</button>
               <div className="alarm-card-actions"><button type="button" className="calendar-today" onClick={() => setDraft({ ...alarm, days: [...alarm.days] })}>Edit</button><button type="button" className="icon-button" aria-label={`Delete ${alarm.label}`} onClick={() => onDelete(alarm.id)}><Icon name="trash" size={16} /></button></div>
             </article>
           ))}

@@ -76,6 +76,9 @@ contextBridge.exposeInMainWorld('mydesk', {
   },
   focus: {
     active: () => ipcRenderer.invoke('focus:active'),
+    scheduled: () => ipcRenderer.invoke('focus:scheduled'),
+    saveScheduled: block => ipcRenderer.invoke('focus:save-scheduled', block),
+    deleteScheduled: id => ipcRenderer.invoke('focus:delete-scheduled', id),
     start: session => ipcRenderer.invoke('focus:start', session),
     finish: (id, discard = false) => ipcRenderer.invoke('focus:finish', id, discard),
     recordManual: session => ipcRenderer.invoke('focus:record-manual', session),

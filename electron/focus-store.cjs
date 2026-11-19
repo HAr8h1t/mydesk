@@ -45,6 +45,13 @@ class FocusStore {
         ON focus_sessions (started_at, status);
       CREATE INDEX IF NOT EXISTS idx_focus_task_started
         ON focus_sessions (task_id, started_at);
+      CREATE TABLE IF NOT EXISTS scheduled_focus_blocks (
+        id TEXT PRIMARY KEY,
+        scheduled_at TEXT NOT NULL,
+        payload TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_scheduled_focus_time
+        ON scheduled_focus_blocks (scheduled_at);
     `)
   }
 
@@ -55,6 +62,55 @@ class FocusStore {
         status, source
       FROM focus_sessions WHERE status = 'active' LIMIT 1
     `).get() || null
+  }
+
+  scheduled() {
+    return this.database.prepare(`
+      SELECT payload FROM scheduled_focus_blocks ORDER BY scheduled_at, rowid
+    `).all().map(row => JSON.parse(row.payload))
+  }
+
+  saveScheduled(input, now = new Date()) {
+    if (!input || typeof input !== 'object') throw new TypeError('Scheduled focus details are required.')
+    validateSessionDetails(input)
+    if (typeof input.id !== 'string' || !input.id || input.id.length > 120) {
+      throw new TypeError('A scheduled focus id is required.')
+    }
+    if (!isValidTimestamp(input.scheduledAt) || Date.parse(input.scheduledAt) <= now.getTime()) {
+      throw new TypeError('Scheduled focus needs a valid future date and time.')
+    }
+    if (input.mode === 'break' && input.taskId) throw new TypeError('Break sessions cannot be linked to a task.')
+    if (input.taskId && !this.database.prepare('SELECT id FROM tasks WHERE id = ?').get(input.taskId)) {
+      throw new TypeError('The selected task no longer exists.')
+    }
+    const task = input.taskId
+      ? this.database.prepare('SELECT title, payload FROM tasks WHERE id = ?').get(input.taskId)
+      : null
+    const taskPayload = task ? JSON.parse(task.payload) : null
+    const existing = this.database.prepare('SELECT payload FROM scheduled_focus_blocks WHERE id = ?').get(input.id)
+    const block = {
+      id: input.id,
+      mode: input.mode,
+      targetMinutes: input.targetMinutes,
+      taskId: input.taskId || '',
+      taskTitle: task?.title || input.taskTitle || '',
+      project: taskPayload?.project || input.project || '',
+      category: input.category || taskPayload?.category || 'Other',
+      scheduledAt: new Date(input.scheduledAt).toISOString(),
+      createdAt: existing ? JSON.parse(existing.payload).createdAt : now.toISOString(),
+    }
+    this.database.prepare(`
+      INSERT INTO scheduled_focus_blocks (id, scheduled_at, payload) VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET scheduled_at = excluded.scheduled_at, payload = excluded.payload
+    `).run(block.id, block.scheduledAt, JSON.stringify(block))
+    return block
+  }
+
+  deleteScheduled(id) {
+    if (typeof id !== 'string' || !id || id.length > 120) {
+      throw new TypeError('A scheduled focus id is required.')
+    }
+    return this.database.prepare('DELETE FROM scheduled_focus_blocks WHERE id = ?').run(id).changes > 0
   }
 
   start(input, now = new Date()) {
@@ -228,6 +284,10 @@ class FocusStore {
         duration_seconds AS durationSeconds, status, source
       FROM focus_sessions ORDER BY started_at DESC
     `).all()
+  }
+
+  exportScheduled() {
+    return this.scheduled()
   }
 
   summaryForRange(startAt, endAt) {
