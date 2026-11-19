@@ -1,0 +1,13 @@
+{
+  "name": "mydesk-sync-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.cjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}

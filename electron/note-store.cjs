@@ -187,7 +187,9 @@ class NoteStore {
       normalized.dailyDate,
       serialized,
     )
-    if (!currentRow) this.addHistory(normalized.id, 'created', payload, normalized.createdAt)
+    if (!currentRow && !Array.isArray(note.history)) {
+      this.addHistory(normalized.id, 'created', payload, normalized.createdAt)
+    }
 
     const deleteLinks = this.database.prepare('DELETE FROM note_links WHERE note_id = ?')
     const insertLink = this.database.prepare(`
@@ -201,6 +203,30 @@ class NoteStore {
       }
       insertLink.run(link.id, normalized.id, link.type, link.targetId, link.label.slice(0, 180))
     })
+
+    if (Array.isArray(note.history)) {
+      const insertHistory = this.database.prepare(`
+        INSERT OR IGNORE INTO note_history (id, note_id, action, created_at, payload)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      note.history.forEach(entry => {
+        if (!entry || typeof entry.id !== 'string' || typeof entry.action !== 'string'
+          || typeof entry.createdAt !== 'string') {
+          throw new TypeError(`Note ${normalized.id} contains an invalid history entry.`)
+        }
+        const historyPayload = { ...entry }
+        delete historyPayload.id
+        delete historyPayload.action
+        delete historyPayload.createdAt
+        insertHistory.run(
+          entry.id,
+          normalized.id,
+          entry.action,
+          entry.createdAt,
+          JSON.stringify(historyPayload),
+        )
+      })
+    }
 
     this.database.prepare('DELETE FROM notes_fts WHERE note_id = ?').run(normalized.id)
     this.database.prepare(`

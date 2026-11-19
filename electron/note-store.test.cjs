@@ -59,3 +59,27 @@ test('manages attachment metadata and hides archived notes from default search',
   assert.equal(store.search('draft').length, 0)
   assert.equal(store.search('draft', true).length, 1)
 })
+
+test('imports synchronized note history idempotently', t => {
+  const store = new NoteStore(':memory:')
+  t.after(() => store.close())
+  const note = {
+    id: 'note-remote',
+    title: 'Remote note',
+    body: 'Synced content',
+    links: [],
+    createdAt: '2025-03-01T10:00:00.000Z',
+    updatedAt: '2025-03-01T10:00:00.000Z',
+    history: [{
+      id: 'history-remote',
+      action: 'created',
+      createdAt: '2025-03-01T10:00:00.000Z',
+      title: 'Remote note',
+      body: 'Synced content',
+    }],
+  }
+
+  store.save(note)
+  store.save(note)
+  assert.deepEqual(store.history(note.id), [note.history[0]])
+})

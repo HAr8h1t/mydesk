@@ -2854,6 +2854,121 @@ button {
   line-height: 1.6;
 }
 
+.sync-account-card {
+  display: grid;
+  gap: 14px;
+}
+
+.sync-account-card .section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+.sync-status {
+  padding: 5px 10px;
+  border-radius: 999px;
+  color: #456b55;
+  background: #e8f4eb;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.sync-status-offline,
+.sync-status-error {
+  color: #934e42;
+  background: #fae9e3;
+}
+
+.sync-status-syncing {
+  color: #735d35;
+  background: #f7f0dd;
+}
+
+.sync-server-row,
+.sync-account-row,
+.sync-conflict-row {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sync-account-row {
+  align-items: center;
+  padding-top: 12px;
+  border-top: 1px solid #e8e8e2;
+}
+
+.sync-account-row .settings-description {
+  margin: 5px 0 0;
+}
+
+.sync-auth-form {
+  display: grid;
+  max-width: 560px;
+  gap: 13px;
+}
+
+.sync-field-group {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 6px;
+  color: #565751;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.sync-field {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid #dedfd8;
+  border-radius: 9px;
+  outline: none;
+  color: #282826;
+  background: #fff;
+}
+
+.sync-field:focus-visible {
+  border-color: #d98262;
+  box-shadow: 0 0 0 3px rgba(217, 130, 98, 0.18);
+}
+
+.sync-success {
+  margin: 0;
+  color: #3f7251;
+  font-size: 13px;
+}
+
+.sync-conflict-list {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #e8e8e2;
+}
+
+.sync-conflict-list h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.sync-conflict-row {
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 11px 0;
+  border-bottom: 1px solid #e8e8e2;
+  font-size: 13px;
+}
+
+.sync-conflict-row:last-child {
+  border-bottom: 0;
+}
+
 .theme-options {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3018,6 +3133,27 @@ button {
 .app-shell[data-theme="dark"] .focus-empty,
 .app-shell[data-theme="dark"] .timeline-sources {
   color: #a9b2ae;
+}
+
+.app-shell[data-theme="dark"] .sync-account-row,
+.app-shell[data-theme="dark"] .sync-conflict-list,
+.app-shell[data-theme="dark"] .sync-conflict-row {
+  border-color: #3a4340;
+}
+
+.app-shell[data-theme="dark"] .sync-field {
+  border-color: #46514c;
+  color: #edf2ee;
+  background: #171e1c;
+}
+
+.app-shell[data-theme="dark"] .sync-field-group,
+.app-shell[data-theme="dark"] .sync-conflict-list h3 {
+  color: #e4e8e4;
+}
+
+.app-shell[data-theme="dark"] .sync-success {
+  color: #a9d2a9;
 }
 
 .app-shell[data-theme="dark"] .nav-item-active,
@@ -5623,6 +5759,23 @@ button {
 
 @media (max-width: 480px) {
   .smart-recommendation {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 700px) {
+  .sync-server-row,
+  .sync-account-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sync-account-row .settings-actions {
+    flex-wrap: wrap;
+  }
+
+  .sync-conflict-row {
     align-items: flex-start;
     flex-direction: column;
   }

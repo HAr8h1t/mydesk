@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { getScheduleOverview } from './services/scheduling.js'
+import SyncAccountPanel from './components/SyncAccountPanel.jsx'
 
 const initialTasks = [
-  { id: 'task-1', title: 'Review weekly priorities', done: false },
-  { id: 'task-2', title: 'Send the project proposal', done: false },
-  { id: 'task-3', title: 'Set up your MyDesk workspace', done: true },
+  { id: createId(), title: 'Review weekly priorities', done: false },
+  { id: createId(), title: 'Send the project proposal', done: false },
+  { id: createId(), title: 'Set up your MyDesk workspace', done: true },
 ]
 
 const eventCategories = [
@@ -21,13 +22,13 @@ const reminderRepeats = ['none', 'daily', 'weekly', 'monthly']
 
 const initialNotes = [
   {
-    id: 'note-1',
+    id: createId(),
     title: 'A little more focus',
     body: 'Make room for the work that matters. One thoughtful step at a time.',
     updatedAt: new Date().toISOString(),
   },
   {
-    id: 'note-2',
+    id: createId(),
     title: 'Ideas for later',
     body: 'A calmer morning routine\nA short walk after lunch\nMore time away from screens',
     updatedAt: new Date().toISOString(),
@@ -141,7 +142,7 @@ function formatDateTimeCompact(value) {
 }
 
 function createId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  return crypto.randomUUID()
 }
 
 function normalizeTask(task) {
@@ -615,6 +616,15 @@ function App() {
   const [searchResults, setSearchResults] = useState([])
 
   useEffect(() => {
+    const engine = window.mydeskSyncEngine
+    if (!engine) return undefined
+    engine.start().catch(error => {
+      setTaskStoreError(`Background synchronization failed: ${error.message}`)
+    })
+    return () => engine.stop()
+  }, [])
+
+  useEffect(() => {
     const database = window.mydesk?.settings
     if (!database) return undefined
     let active = true
@@ -665,6 +675,57 @@ function App() {
   useEffect(() => {
     const unsubscribeError = window.mydesk?.backups?.onError?.(message => setBackupError(message))
     return () => unsubscribeError?.()
+  }, [])
+
+  useEffect(() => {
+    const database = window.mydesk
+    const subscribe = database?.sync?.onUpdated
+    if (!subscribe) return undefined
+    let active = true
+    const refreshFromLocalDatabase = async () => {
+      const results = await Promise.allSettled([
+        database.tasks.load(),
+        database.reminders.load(),
+        database.notes.load(),
+        database.alarms.load(),
+        database.settings.load(),
+        database.focus.active(),
+      ])
+      if (!active) return
+      const [savedTasks, savedReminders, savedNotes, savedAlarms, savedSettings, activeSession] = results
+      if (savedTasks.status === 'fulfilled') {
+        setTasks(savedTasks.value.tasks.map(normalizeTask))
+        setTaskStoreReady(true)
+      } else setTaskStoreError(`Tasks could not be refreshed after synchronization: ${savedTasks.reason.message}`)
+      if (savedReminders.status === 'fulfilled') {
+        setReminders(savedReminders.value)
+        setReminderStoreReady(true)
+      } else setReminderStoreError(`Reminders could not be refreshed after synchronization: ${savedReminders.reason.message}`)
+      if (savedNotes.status === 'fulfilled') {
+        const nextNotes = savedNotes.value.notes.map(normalizeNote)
+        setNotes(nextNotes)
+        setSelectedNoteId(current => nextNotes.some(note => note.id === current) ? current : nextNotes[0]?.id ?? null)
+        setNotesReady(true)
+      } else setNotesError(`Notes could not be refreshed after synchronization: ${savedNotes.reason.message}`)
+      if (savedAlarms.status === 'fulfilled') {
+        setAlarms(savedAlarms.value.alarms)
+        setAlarmProfiles(savedAlarms.value.profiles)
+        setAlarmHistory(savedAlarms.value.history)
+        setAlarmsReady(true)
+      } else setAlarmError(`Alarms could not be refreshed after synchronization: ${savedAlarms.reason.message}`)
+      if (savedSettings.status === 'fulfilled') setEvents(savedSettings.value.events)
+      if (activeSession.status === 'fulfilled') setActiveFocus(activeSession.value)
+      setFocusRevision(value => value + 1)
+    }
+    const unsubscribe = subscribe(() => {
+      refreshFromLocalDatabase().catch(error => {
+        if (active) setTaskStoreError(`Local data could not be refreshed after synchronization: ${error.message}`)
+      })
+    })
+    return () => {
+      active = false
+      unsubscribe()
+    }
   }, [])
 
   useEffect(() => {
@@ -2644,6 +2705,8 @@ function SettingsPage({ theme, onSaveSetting, autoBackupEnabled, backupDirectory
           ))}
         </div>
       </section>
+
+      <SyncAccountPanel />
 
       <section className="settings-card surface-card">
         <div className="section-heading"><div><p className="eyebrow">LOCAL-FIRST SAFETY</p><h2>Backup and restore</h2></div></div>

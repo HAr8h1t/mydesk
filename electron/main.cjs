@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, dialog, globalShortcut, ipcMain, safeStorage, shell } = require('electron')
 const fs = require('node:fs/promises')
 const fsConstants = require('node:fs').constants
 const { randomUUID } = require('node:crypto')
@@ -12,6 +12,8 @@ const { NoteStore } = require('./note-store.cjs')
 const { FocusStore } = require('./focus-store.cjs')
 const { FocusScheduler } = require('./focus-scheduler.cjs')
 const { SettingsStore } = require('./settings-store.cjs')
+const { SyncStore } = require('./sync-store.cjs')
+const { AuthService, EncryptedCredentialStore } = require('./auth-service.cjs')
 const { BackupScheduler } = require('./backup-scheduler.cjs')
 const { isTrustedIpcSender, isTrustedRendererUrl } = require('./ipc-security.cjs')
 const { createDatabaseSnapshot, inspectDatabaseBackup, updateAttachmentPaths } = require('./backup-service.cjs')
@@ -25,6 +27,8 @@ let noteStore
 let focusStore
 let focusScheduler
 let settingsStore
+let syncStore
+let authService
 let backupScheduler
 let mainWindow
 let databasePath
@@ -37,22 +41,44 @@ function waitForPendingDatabaseOperations() {
   return new Promise(resolve => pendingOperationWaiters.push(resolve))
 }
 
-function openStores() {
+async function openStores() {
+  syncStore = new SyncStore(databasePath)
   taskStore = new TaskStore(databasePath)
   reminderStore = new ReminderStore(databasePath)
   alarmStore = new AlarmStore(databasePath)
   noteStore = new NoteStore(databasePath)
   focusStore = new FocusStore(databasePath)
   settingsStore = new SettingsStore(databasePath)
-  reminderScheduler = new ReminderScheduler(reminderStore, () => BrowserWindow.getAllWindows())
+  authService = new AuthService({
+    syncStore,
+    credentialStore: new EncryptedCredentialStore(
+      path.join(app.getPath('userData'), 'auth-session.bin'),
+      safeStorage,
+    ),
+    initialApiUrl: process.env.MYDESK_API_URL || 'http://localhost:3001',
+  })
+  await authService.initialize()
+  reminderScheduler = new ReminderScheduler(
+    reminderStore,
+    () => BrowserWindow.getAllWindows(),
+    () => syncStore.reconcileSnapshot('reminder', reminderStore.list()),
+  )
   alarmScheduler = new AlarmScheduler(alarmStore, () => BrowserWindow.getAllWindows())
-  focusScheduler = new FocusScheduler(focusStore, () => BrowserWindow.getAllWindows())
+  focusScheduler = new FocusScheduler(
+    focusStore,
+    () => BrowserWindow.getAllWindows(),
+    () => {
+      reconcileSyncType('focus-session')
+      reconcileSyncType('task')
+    },
+  )
   backupScheduler = new BackupScheduler(
     settingsStore,
     destination => withDatabaseMaintenance(() => createBackupFile(destination)),
     () => BrowserWindow.getAllWindows(),
     path.join(app.getPath('userData'), 'backups'),
   )
+  reconcileLocalData()
 }
 
 function startSchedulers() {
@@ -67,18 +93,118 @@ function closeStores() {
   alarmScheduler?.stop()
   focusScheduler?.stop()
   backupScheduler?.stop()
-  const stores = [reminderStore, alarmStore, noteStore, focusStore, settingsStore, taskStore]
+  const stores = [reminderStore, alarmStore, noteStore, focusStore, settingsStore, taskStore, syncStore]
   reminderStore = undefined
   alarmStore = undefined
   noteStore = undefined
   focusStore = undefined
   settingsStore = undefined
   taskStore = undefined
+  syncStore = undefined
+  authService = undefined
   reminderScheduler = undefined
   alarmScheduler = undefined
   focusScheduler = undefined
   backupScheduler = undefined
   stores.forEach(store => store?.close())
+}
+
+function reconcileLocalData() {
+  for (const entityType of [
+    'task',
+    'reminder',
+    'note',
+    'alarm',
+    'calendar-event',
+    'focus-session',
+    'scheduled-focus-block',
+  ]) reconcileSyncType(entityType)
+}
+
+function reconcileSyncType(entityType) {
+  const records = {
+    task: () => taskStore.list(),
+    reminder: () => reminderStore.list(),
+    note: () => noteStore.list().map(note => ({
+      ...note,
+      history: noteStore.history(note.id),
+    })),
+    alarm: () => alarmStore.list().alarms,
+    'calendar-event': () => settingsStore.load().events,
+    'focus-session': () => focusStore.exportAll().filter(session => session.status !== 'active'),
+    'scheduled-focus-block': () => focusStore.exportScheduled(),
+  }[entityType]
+  if (!records) throw new TypeError(`Unsupported sync entity type: ${entityType}`)
+  return syncStore.reconcileSnapshot(entityType, records())
+}
+
+async function applyRemoteToLocal(remote) {
+  const { entityType, recordId, payload, deletedAt } = remote
+  const deleting = Boolean(deletedAt)
+  if (entityType === 'task') {
+    const tasks = taskStore.list().filter(task => task.id !== recordId)
+    if (!deleting) {
+      const local = taskStore.list().find(task => task.id === recordId)
+      tasks.push({ ...payload, attachments: local?.attachments || [] })
+    }
+    const ids = new Set(tasks.map(task => task.id))
+    taskStore.save(tasks.map(task => ({
+      ...task,
+      dependencies: (task.dependencies || []).filter(id => ids.has(id)),
+    })))
+  } else if (entityType === 'reminder') {
+    const reminders = reminderStore.list().filter(item => item.id !== recordId)
+    if (!deleting) reminders.push(payload)
+    reminderStore.save(reminders)
+    reminderScheduler.refresh()
+  } else if (entityType === 'note') {
+    if (deleting) await removeStoredAttachments(noteStore.delete(recordId))
+    else noteStore.save(payload)
+  } else if (entityType === 'alarm') {
+    const current = alarmStore.list()
+    const alarms = current.alarms.filter(item => item.id !== recordId)
+    if (!deleting) alarms.push(payload)
+    alarmStore.save(alarms, current.profiles)
+    alarmScheduler.refresh()
+  } else if (entityType === 'calendar-event') {
+    const events = settingsStore.load().events.filter(item => item.id !== recordId)
+    if (!deleting) events.push(payload)
+    settingsStore.save('calendar-events', events)
+  } else if (['focus-session', 'scheduled-focus-block'].includes(entityType)) {
+    focusStore.applySyncRecord(entityType, recordId, payload, deletedAt)
+    if (entityType === 'focus-session') focusScheduler.refresh()
+  } else {
+    throw new TypeError(`Unsupported remote sync entity type: ${entityType}`)
+  }
+}
+
+async function applyRemote(remote) {
+  const previous = syncStore.record(remote.entityType, remote.recordId)
+  const result = syncStore.applyRemote(remote)
+  if (!result.applied) {
+    if (result.conflict) {
+      syncStore.recordConflict({
+        accountId: remote.accountId,
+        entityType: remote.entityType,
+        recordId: remote.recordId,
+        localPayload: result.conflict.local,
+        remotePayload: result.conflict.remote,
+      })
+    }
+    return result
+  }
+  try {
+    await applyRemoteToLocal(remote)
+  } catch (error) {
+    syncStore.restoreRecord(remote.entityType, remote.recordId, previous)
+    throw error
+  }
+  BrowserWindow.getAllWindows().forEach(window => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('sync:updated', { entityTypes: [remote.entityType], recordId: remote.recordId })
+    }
+  })
+  return result
 }
 
 async function withDatabaseMaintenance(operation) {
@@ -318,14 +444,14 @@ async function restoreBackupFile(backupPath) {
         newAttachmentsInstalled = true
         await fs.rename(staged.temporaryDatabase, databasePath)
         newDatabaseInstalled = true
-        openStores()
+        await openStores()
       } catch (error) {
         closeStores()
         if (newDatabaseInstalled) await fs.rm(databasePath, { force: true })
         if (newAttachmentsInstalled) await fs.rm(attachmentDirectory, { recursive: true, force: true })
         if (oldDatabaseMoved) await fs.rename(displacedDatabase, databasePath)
         if (oldAttachmentsMoved) await fs.rename(displacedAttachments, attachmentDirectory)
-        openStores()
+        await openStores()
         throw error
       }
       if (oldDatabaseMoved) await fs.rm(displacedDatabase, { force: true }).catch(error => console.error('Unable to remove the replaced database after restore.', error))
@@ -334,7 +460,7 @@ async function restoreBackupFile(backupPath) {
       return { restored: true, safetyBackup: path.basename(safetyPath) }
     } catch (error) {
       if (!taskStore) {
-        openStores()
+        await openStores()
         startSchedulers()
       }
       if (!safetyCreated) {
@@ -396,6 +522,8 @@ registerIpcHandler('tasks:list', () => ({
 registerIpcHandler('tasks:save', (_event, tasks) => {
   taskStore.save(tasks)
   reminderStore.importLegacyTaskReminders(tasks)
+  reconcileSyncType('task')
+  reconcileSyncType('reminder')
   reminderScheduler.refresh()
   return reminderStore.list()
 })
@@ -410,52 +538,62 @@ registerIpcHandler('tasks:history-for-date', (_event, date) => {
 })
 registerIpcHandler('reminders:list', () => {
   reminderStore.importLegacyTaskReminders(taskStore.list())
+  reconcileSyncType('reminder')
   reminderScheduler.refresh()
   return reminderStore.list()
 })
 registerIpcHandler('reminders:save', (_event, reminders) => {
   reminderStore.save(reminders)
+  reconcileSyncType('reminder')
   reminderScheduler.refresh()
   return reminderStore.list()
 })
 registerIpcHandler('reminders:complete', (_event, id) => {
   const reminder = reminderStore.complete(id)
+  reconcileSyncType('reminder')
   reminderScheduler.refresh()
   return reminder
 })
 registerIpcHandler('reminders:snooze', (_event, id, minutes) => {
   const reminder = reminderStore.snooze(id, minutes)
+  reconcileSyncType('reminder')
   reminderScheduler.refresh()
   return reminder
 })
 registerIpcHandler('reminders:delete', (_event, id) => {
   const deleted = reminderStore.delete(id)
+  reconcileSyncType('reminder')
   reminderScheduler.refresh()
   return deleted
 })
 registerIpcHandler('alarms:list', () => alarmStore.list())
 registerIpcHandler('alarms:save', (_event, alarms, profiles) => {
   const saved = alarmStore.save(alarms, profiles)
+  reconcileSyncType('alarm')
   alarmScheduler.refresh()
   return saved
 })
 registerIpcHandler('alarms:snooze', (_event, id, minutes) => {
   const alarm = alarmStore.snooze(id, minutes)
+  reconcileSyncType('alarm')
   alarmScheduler.refresh()
   return alarm
 })
 registerIpcHandler('alarms:dismiss', (_event, id) => {
   const alarm = alarmStore.dismiss(id)
+  reconcileSyncType('alarm')
   alarmScheduler.refresh()
   return alarm
 })
 registerIpcHandler('alarms:set-enabled', (_event, id, enabled) => {
   const alarm = alarmStore.setEnabled(id, enabled)
+  reconcileSyncType('alarm')
   alarmScheduler.refresh()
   return alarm
 })
 registerIpcHandler('alarms:delete', (_event, id) => {
   const deleted = alarmStore.delete(id)
+  reconcileSyncType('alarm')
   alarmScheduler.refresh()
   return deleted
 })
@@ -463,12 +601,21 @@ registerIpcHandler('notes:list', () => ({
   notes: noteStore.list(),
   hasImportedLegacyNotes: noteStore.hasImportedLegacyNotes(),
 }))
-registerIpcHandler('notes:save-all', (_event, notes) => noteStore.saveAll(notes))
-registerIpcHandler('notes:save', (_event, note) => noteStore.save(note))
+registerIpcHandler('notes:save-all', (_event, notes) => {
+  const saved = noteStore.saveAll(notes)
+  reconcileSyncType('note')
+  return saved
+})
+registerIpcHandler('notes:save', (_event, note) => {
+  const saved = noteStore.save(note)
+  reconcileSyncType('note')
+  return saved
+})
 registerIpcHandler('notes:search', (_event, query, includeArchived) => noteStore.search(query, Boolean(includeArchived)))
 registerIpcHandler('notes:history', (_event, noteId) => noteStore.history(noteId))
 registerIpcHandler('notes:delete', async (_event, noteId) => {
   await removeStoredAttachments(noteStore.delete(noteId))
+  reconcileSyncType('note')
   return noteStore.list()
 })
 registerIpcHandler('notes:add-attachments', async (_event, noteId) => {
@@ -508,7 +655,9 @@ registerIpcHandler('notes:add-attachments', async (_event, noteId) => {
         filePath,
       })
     }
-    return noteStore.addAttachments(noteId, attachments)
+    const saved = noteStore.addAttachments(noteId, attachments)
+    reconcileSyncType('note')
+    return saved
   } catch (error) {
     await Promise.all(copiedPaths.map(async filePath => {
       try {
@@ -523,6 +672,7 @@ registerIpcHandler('notes:add-attachments', async (_event, noteId) => {
 registerIpcHandler('notes:remove-attachment', async (_event, noteId, attachmentId) => {
   const filePath = noteStore.removeAttachment(noteId, attachmentId)
   if (filePath) await removeStoredAttachments([filePath])
+  reconcileSyncType('note')
   return noteStore.list().find(note => note.id === noteId)?.attachments || []
 })
 registerIpcHandler('notes:open-attachment', async (_event, noteId, attachmentId) => {
@@ -534,26 +684,100 @@ registerIpcHandler('notes:open-attachment', async (_event, noteId, attachmentId)
 registerIpcHandler('settings:load', () => settingsStore.load())
 registerIpcHandler('settings:save', (_event, key, value) => {
   const saved = settingsStore.save(key, value)
+  if (key === 'calendar-events') reconcileSyncType('calendar-event')
   if (['auto-backup-enabled', 'backup-directory'].includes(key)) backupScheduler.refresh()
   return saved
 })
 registerIpcHandler('focus:active', () => focusStore.active())
 registerIpcHandler('focus:scheduled', () => focusStore.scheduled())
-registerIpcHandler('focus:save-scheduled', (_event, block) => focusStore.saveScheduled(block))
-registerIpcHandler('focus:delete-scheduled', (_event, id) => focusStore.deleteScheduled(id))
+registerIpcHandler('focus:save-scheduled', (_event, block) => {
+  const saved = focusStore.saveScheduled(block)
+  reconcileSyncType('scheduled-focus-block')
+  return saved
+})
+registerIpcHandler('focus:delete-scheduled', (_event, id) => {
+  const deleted = focusStore.deleteScheduled(id)
+  reconcileSyncType('scheduled-focus-block')
+  return deleted
+})
 registerIpcHandler('focus:start', (_event, session) => {
   const started = focusStore.start(session)
+  reconcileSyncType('focus-session')
   focusScheduler.refresh()
   return started
 })
 registerIpcHandler('focus:finish', (_event, id, discard) => {
   const finished = focusStore.finish(id, new Date(), Boolean(discard))
+  reconcileSyncType('focus-session')
+  reconcileSyncType('task')
   focusScheduler.refresh()
   return finished
 })
-registerIpcHandler('focus:record-manual', (_event, session) => focusStore.recordManual(session))
+registerIpcHandler('focus:record-manual', (_event, session) => {
+  const saved = focusStore.recordManual(session)
+  reconcileSyncType('focus-session')
+  reconcileSyncType('task')
+  return saved
+})
 registerIpcHandler('focus:history', (_event, startAt, endAt) => focusStore.historyForRange(startAt, endAt))
 registerIpcHandler('focus:summary', (_event, startAt, endAt) => focusStore.summaryForRange(startAt, endAt))
+registerIpcHandler('sync:state', () => syncStore.state())
+registerIpcHandler('sync:activate-account', (_event, accountId) => syncStore.setActiveAccount(accountId))
+registerIpcHandler('sync:logout', () => syncStore.clearActiveAccount())
+registerIpcHandler('sync:pending', () => syncStore.pending())
+registerIpcHandler('sync:mark-in-flight', (_event, operationIds) => {
+  if (!Array.isArray(operationIds) || operationIds.length > 500
+    || operationIds.some(id => typeof id !== 'string' || !id)) {
+    throw new TypeError('A valid sync operation list is required.')
+  }
+  syncStore.markInFlight(operationIds)
+  return syncStore.state()
+})
+registerIpcHandler('sync:retry', (_event, operationId, error, retryAt) => {
+  if (typeof operationId !== 'string' || !operationId || typeof error !== 'string'
+    || !Number.isFinite(Date.parse(retryAt))) {
+    throw new TypeError('Valid sync retry details are required.')
+  }
+  syncStore.markRetry(operationId, error, retryAt)
+  return syncStore.state()
+})
+registerIpcHandler('sync:mark-synced', (_event, operationId, serverVersion) => {
+  if (typeof operationId !== 'string' || !operationId || !Number.isInteger(serverVersion) || serverVersion < 1) {
+    throw new TypeError('Valid sync acknowledgement details are required.')
+  }
+  return syncStore.markSynced(operationId, serverVersion)
+})
+registerIpcHandler('sync:conflicts', () => syncStore.conflicts())
+registerIpcHandler('sync:cursor', () => syncStore.cursor())
+registerIpcHandler('sync:set-cursor', (_event, value) => syncStore.setCursor(value))
+registerIpcHandler('sync:push', (_event, operations) => {
+  if (!Array.isArray(operations) || operations.length > 100) {
+    throw new TypeError('Provide no more than 100 sync operations.')
+  }
+  return authService.push(operations)
+})
+registerIpcHandler('sync:pull', (_event, cursor) => authService.pull(cursor))
+registerIpcHandler('sync:register-device', (_event, device) => authService.registerDevice(device))
+registerIpcHandler('sync:apply-remote', (_event, remote) => applyRemote(remote))
+registerIpcHandler('sync:resolve-conflict', async (_event, id, resolution) => {
+  if (resolution === 'keep-remote') {
+    const conflict = syncStore.conflicts().find(item => item.id === id)
+    if (!conflict) return false
+    await applyRemoteToLocal(conflict.remotePayload)
+  }
+  const resolved = syncStore.resolveConflict(id, resolution)
+  if (resolved) {
+    BrowserWindow.getAllWindows().forEach(window => {
+      if (!window.isDestroyed()) window.webContents.send('sync:updated', { conflictsChanged: true })
+    })
+  }
+  return resolved
+})
+registerIpcHandler('auth:status', () => authService.status())
+registerIpcHandler('auth:configure', (_event, apiUrl) => authService.configure(apiUrl))
+registerIpcHandler('auth:register', (_event, email, password) => authService.register(email, password))
+registerIpcHandler('auth:login', (_event, email, password) => authService.login(email, password))
+registerIpcHandler('auth:logout', () => authService.logout())
 registerIpcHandler('backups:create', async () => {
   const suggested = `mydesk-backup-${dateStamp()}.sqlite`
   const options = {
@@ -683,9 +907,9 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   databasePath = path.join(app.getPath('userData'), 'mydesk.sqlite')
-  openStores()
+  await openStores()
   startSchedulers()
   createWindow()
 

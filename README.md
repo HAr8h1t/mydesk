@@ -16,20 +16,22 @@ Android.
 > **Project status: Active development**
 >
 > The Windows desktop build has working task, calendar, timeline, reminder,
-> alarm and notes modules backed by SQLite and Electron IPC. Focus tracking,
-> selectable themes, and backup/export are also available. The Password Vault,
-> Android support, and database migrations remain future work.
+> alarm, focus and notes modules backed by SQLite and Electron IPC. A Capacitor
+> Android project now has independent local SQLite storage and local
+> notifications. Optional account synchronization and a PostgreSQL API are
+> available as an incremental implementation; Android Studio/device and
+> PostgreSQL deployment verification are still required.
 
 ## Overview
 
-MyDesk is a personal productivity and PC companion application being
-built around a simple idea: everyday productivity tools should be
-useful, responsive and keep the user's information under their control.
+MyDesk is a personal productivity workspace built around a simple idea:
+everyday productivity tools should be useful, responsive and keep the user's
+information under their control.
 
-The project starts with a Windows desktop application and is being
-architected with future Android support in mind. The goal is to share
-application logic where practical while using the right native
-capabilities for each platform.
+MyDesk supports Windows desktop and has a Capacitor Android application.
+The platforms share React UI and business rules where practical while
+adapting local storage, notifications, authentication and lifecycle handling
+to each platform.
 
 ### Core principles
 
@@ -123,7 +125,7 @@ These are exploratory ideas, not current commitments.
   SQLite API                 Node.js built-in node:sqlite
   Packaging                  Electron Builder
 
-### Planned Android support
+### Android application
 
   Area                         Technology
   ---------------------------- -------------------------------------------
@@ -134,9 +136,31 @@ These are exploratory ideas, not current commitments.
   Android build tooling        Android Studio / Gradle
 
 Electron is for desktop and does not run as the Android runtime. The
-intended approach is to reuse suitable React UI and platform-independent
-application logic, while implementing Android-specific storage,
-notifications, lifecycle behaviour and mobile layouts separately.
+Android application reuses React UI and implements Android-specific storage,
+notifications, lifecycle behaviour and mobile layouts through Capacitor.
+
+The Android project is generated under `android/`. Build it with Android
+Studio or `npm run android:sync`; a compatible JDK and Android SDK are
+required. Each Android installation has its own local SQLite database. Local
+tasks, notes, events, reminders and alarms remain available without an account
+or network connection.
+
+### Optional cross-device synchronization
+
+The local database remains the source used by the UI. When an account is
+configured in Settings, the persistent sync queue uploads changes to the
+optional Node.js/PostgreSQL API and applies account-scoped remote changes.
+Conflicting edits are kept for explicit resolution. Desktop credentials use
+Electron encrypted storage; Android credentials use Android Keystore-backed
+storage. Notifications are scheduled locally on each device.
+
+To run the backend and configure PostgreSQL, see
+[`server/README.md`](server/README.md). The API URL can be set in Settings;
+local application use does not depend on the API being available. Automatic
+sync currently runs while the app is active, retries with backoff, and is
+triggered on reconnect and resume; it is not guaranteed by an OS background
+worker after the app is closed. File attachments remain device-local and are
+not uploaded by the sync API.
 
 ## Architecture
 
@@ -253,6 +277,24 @@ Electron desktop application.
 npm run build
 ```
 
+Run unit tests:
+
+``` bash
+npm test
+```
+
+### Build/sync Android
+
+Install Android Studio, a supported JDK and the Android SDK, then run:
+
+``` bash
+npm run android:sync
+```
+
+Open the generated project with `npm run android:open`. This repository's
+environment does not currently include Android build tools, so validate the
+Gradle build and notifications on a real or emulated device before release.
+
 ### Package the Windows application
 
 ``` bash
@@ -265,9 +307,8 @@ after Electron or the bundled Node.js runtime is upgraded.
 
 ## Repository structure
 
-The current project is intentionally small. The architecture will be
-introduced incrementally rather than creating every planned folder in
-advance.
+The project keeps the existing feature structure and adds platform and
+service modules incrementally.
 
 ``` text
 mydesk/
@@ -282,6 +323,10 @@ mydesk/
 │   ├── App.jsx
 │   ├── index.css
 │   └── main.jsx
+├── android/
+├── server/
+│   ├── index.cjs
+│   └── migrations/
 ├── docs/
 │   └── ARCHITECTURE.md
 ├── package.json
@@ -324,7 +369,9 @@ feature work expands.
 -   [ ] Design and review the Password Vault security model
 -   [ ] Test and package Windows releases
 -   [ ] Prepare shared platform contracts for mobile
--   [ ] Integrate Capacitor and implement Android support
+-   [x] Integrate Capacitor Android SQLite and local notifications
+-   [x] Add persistent sync metadata, outbox, authentication and REST API
+-   [ ] Verify PostgreSQL integration and Android device/background behavior
 
 Checkboxes describe project progress at the time this README was written
 and should be updated as work is completed.

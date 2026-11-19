@@ -290,6 +290,66 @@ class FocusStore {
     return this.scheduled()
   }
 
+  applySyncRecord(entityType, recordId, payload, deletedAt) {
+    if (!['focus-session', 'scheduled-focus-block'].includes(entityType)) {
+      throw new TypeError(`Unsupported focus sync entity type: ${entityType}`)
+    }
+    if (typeof recordId !== 'string' || !recordId) throw new TypeError('A focus record id is required.')
+    if (deletedAt) {
+      const table = entityType === 'focus-session' ? 'focus_sessions' : 'scheduled_focus_blocks'
+      this.database.prepare(`DELETE FROM ${table} WHERE id = ?`).run(recordId)
+      return
+    }
+    if (!payload || payload.id !== recordId) throw new TypeError('The remote focus record is invalid.')
+    if (entityType === 'focus-session') {
+      validateSessionDetails(payload)
+      if (!isValidTimestamp(payload.startedAt)
+        || !['completed', 'discarded'].includes(payload.status)
+        || !['timer', 'manual'].includes(payload.source)
+        || (payload.endedAt && !isValidTimestamp(payload.endedAt))
+        || !Number.isInteger(payload.durationSeconds) || payload.durationSeconds < 0) {
+        throw new TypeError('The remote focus session is invalid.')
+      }
+      this.database.prepare(`
+        INSERT INTO focus_sessions (
+          id, mode, task_id, task_title, project, category, started_at, planned_end_at,
+          ended_at, target_minutes, duration_seconds, status, source
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          mode = excluded.mode, task_id = excluded.task_id, task_title = excluded.task_title,
+          project = excluded.project, category = excluded.category, started_at = excluded.started_at,
+          planned_end_at = excluded.planned_end_at, ended_at = excluded.ended_at,
+          target_minutes = excluded.target_minutes, duration_seconds = excluded.duration_seconds,
+          status = excluded.status, source = excluded.source
+      `).run(
+        payload.id,
+        payload.mode,
+        payload.taskId || '',
+        payload.taskTitle || '',
+        payload.project || '',
+        payload.category || 'Other',
+        payload.startedAt,
+        payload.plannedEndAt || '',
+        payload.endedAt || '',
+        payload.targetMinutes,
+        payload.durationSeconds,
+        payload.status,
+        payload.source,
+      )
+      return
+    }
+
+    validateSessionDetails(payload)
+    if (!isValidTimestamp(payload.scheduledAt)
+      || payload.mode === 'break' && payload.taskId) {
+      throw new TypeError('The remote scheduled focus block is invalid.')
+    }
+    this.database.prepare(`
+      INSERT INTO scheduled_focus_blocks (id, scheduled_at, payload) VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET scheduled_at = excluded.scheduled_at, payload = excluded.payload
+    `).run(recordId, payload.scheduledAt, JSON.stringify(payload))
+  }
+
   summaryForRange(startAt, endAt) {
     if (!isValidTimestamp(startAt) || !isValidTimestamp(endAt) || Date.parse(startAt) >= Date.parse(endAt)) {
       throw new TypeError('A valid focus summary date range is required.')

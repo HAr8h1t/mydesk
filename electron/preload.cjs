@@ -99,6 +99,35 @@ contextBridge.exposeInMainWorld('mydesk', {
     load: () => ipcRenderer.invoke('settings:load'),
     save: (key, value) => ipcRenderer.invoke('settings:save', key, value),
   },
+  sync: {
+    state: () => ipcRenderer.invoke('sync:state'),
+    activateAccount: accountId => ipcRenderer.invoke('sync:activate-account', accountId),
+    logout: () => ipcRenderer.invoke('sync:logout'),
+    pending: () => ipcRenderer.invoke('sync:pending'),
+    markInFlight: operationIds => ipcRenderer.invoke('sync:mark-in-flight', operationIds),
+    retry: (operationId, error, retryAt) => ipcRenderer.invoke('sync:retry', operationId, error, retryAt),
+    markSynced: (operationId, serverVersion) => ipcRenderer.invoke('sync:mark-synced', operationId, serverVersion),
+    conflicts: () => ipcRenderer.invoke('sync:conflicts'),
+    resolveConflict: (id, resolution) => ipcRenderer.invoke('sync:resolve-conflict', id, resolution),
+    cursor: () => ipcRenderer.invoke('sync:cursor'),
+    setCursor: value => ipcRenderer.invoke('sync:set-cursor', value),
+    push: operations => ipcRenderer.invoke('sync:push', operations),
+    pull: cursor => ipcRenderer.invoke('sync:pull', cursor),
+    registerDevice: device => ipcRenderer.invoke('sync:register-device', device),
+    applyRemote: record => ipcRenderer.invoke('sync:apply-remote', record),
+    onUpdated: callback => {
+      const listener = (_event, payload) => callback(payload)
+      ipcRenderer.on('sync:updated', listener)
+      return () => ipcRenderer.removeListener('sync:updated', listener)
+    },
+  },
+  auth: {
+    status: () => ipcRenderer.invoke('auth:status'),
+    configure: apiUrl => ipcRenderer.invoke('auth:configure', apiUrl),
+    register: (email, password) => ipcRenderer.invoke('auth:register', email, password),
+    login: (email, password) => ipcRenderer.invoke('auth:login', email, password),
+    logout: () => ipcRenderer.invoke('auth:logout'),
+  },
   backups: {
     create: () => ipcRenderer.invoke('backups:create'),
     restore: () => ipcRenderer.invoke('backups:restore'),

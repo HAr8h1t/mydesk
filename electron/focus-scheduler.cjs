@@ -3,9 +3,10 @@ const { Notification } = require('electron')
 const maxTimerDelay = 2_147_000_000
 
 class FocusScheduler {
-  constructor(store, getWindows) {
+  constructor(store, getWindows, onCompleted = () => {}) {
     this.store = store
     this.getWindows = getWindows
+    this.onCompleted = onCompleted
     this.timer = null
     this.stopped = false
   }
@@ -53,6 +54,11 @@ class FocusScheduler {
     if (!session) {
       this.refresh()
       return
+    }
+    try {
+      this.onCompleted(session)
+    } catch (error) {
+      this.reportError(`The completed focus session could not be added to the sync queue: ${error.message}`)
     }
     const title = session.mode === 'break' ? 'Break complete' : 'Focus session complete'
     const body = session.taskTitle ? `You focused on ${session.taskTitle}.` : 'Your focus session is complete.'
