@@ -29,3 +29,27 @@ release/
 *.njsproj
 *.sln
 *.sw?
+
+# Dependencies
+# Build outputs
+
+build/
+
+# Android generated files
+android/.gradle/
+android/**/build/
+android/local.properties
+android/captures/
+
+# Android generated files
+android/.gradle/
+android/**/build/
+android/local.properties
+android/captures/
+
+# Environment files
+.env.*
+!.env.example
+
+# IDE
+.idea/
