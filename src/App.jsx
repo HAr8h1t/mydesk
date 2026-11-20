@@ -14,6 +14,7 @@ import {
   stopTonePreview,
 } from './services/sound-effects.js'
 import SyncAccountPanel from './components/SyncAccountPanel.jsx'
+import NotesView from './features/notes/NotesView.jsx'
 
 const initialTasks = [
   { id: createId(), title: 'Review weekly priorities', done: false },
@@ -73,6 +74,7 @@ const iconContent = {
   arrow: <><path d="M5 12h14M13 6l6 6-6 6" /></>,
   search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>,
   trash: <><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5" /></>,
+  pin: <><path d="m16 3 5 5-4 1-4 4v5l-2 2-2-7-7-7 2-2h5l4-4Z" /><path d="m2 22 7-7" /></>,
   spark: <><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z" /><path d="m19 14 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14Z" /></>,
   edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" /></>,
   sidebarCollapse: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16m9-8h-6m0 0 3-3m-3 3 3 3" /></>,
@@ -209,42 +211,6 @@ function normalizeNote(note) {
     links: Array.isArray(note.links) ? note.links : [],
     attachments: Array.isArray(note.attachments) ? note.attachments : [],
   }
-}
-
-function renderMarkdownInline(text, keyPrefix) {
-  return text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|~~[^~]+~~)/g).map((part, index) => {
-    const key = `${keyPrefix}-${index}`
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={key}>{part.slice(2, -2)}</strong>
-    if (part.startsWith('*') && part.endsWith('*')) return <em key={key}>{part.slice(1, -1)}</em>
-    if (part.startsWith('`') && part.endsWith('`')) return <code key={key}>{part.slice(1, -1)}</code>
-    if (part.startsWith('~~') && part.endsWith('~~')) return <del key={key}>{part.slice(2, -2)}</del>
-    return part
-  })
-}
-
-function renderMarkdown(markdown) {
-  return markdown.split(/\n{2,}/).filter(Boolean).map((block, index) => {
-    const key = `block-${index}`
-    const heading = block.match(/^(#{1,3})\s+(.+)$/)
-    if (heading) {
-      const Heading = `h${heading[1].length}`
-      return <Heading key={key}>{renderMarkdownInline(heading[2], key)}</Heading>
-    }
-    const lines = block.split('\n')
-    if (lines.every(line => /^\s*[-*]\s+/.test(line))) {
-      return <ul key={key}>{lines.map((line, lineIndex) => (
-        <li key={`${key}-${lineIndex}`}>{renderMarkdownInline(line.replace(/^\s*[-*]\s+/, ''), `${key}-${lineIndex}`)}</li>
-      ))}</ul>
-    }
-    if (lines.every(line => /^\s*\d+\.\s+/.test(line))) {
-      return <ol key={key}>{lines.map((line, lineIndex) => (
-        <li key={`${key}-${lineIndex}`}>{renderMarkdownInline(line.replace(/^\s*\d+\.\s+/, ''), `${key}-${lineIndex}`)}</li>
-      ))}</ol>
-    }
-    return <p key={key}>{lines.map((line, lineIndex) => (
-      <span key={`${key}-${lineIndex}`}>{lineIndex > 0 && <br />}{renderMarkdownInline(line, `${key}-${lineIndex}`)}</span>
-    ))}</p>
-  })
 }
 
 function localDateKey(value) {
@@ -595,6 +561,7 @@ function App() {
   const [reminderStoreError, setReminderStoreError] = useState('')
   const [notesReady, setNotesReady] = useState(() => !window.mydesk?.notes)
   const [notesError, setNotesError] = useState('')
+  const [noteSaveState, setNoteSaveState] = useState('saved')
   const [alarms, setAlarms] = useState([])
   const [alarmProfiles, setAlarmProfiles] = useState(['General'])
   const [alarmHistory, setAlarmHistory] = useState([])
@@ -604,8 +571,8 @@ function App() {
   const [taskActionError, setTaskActionError] = useState('')
   const [noteSearch, setNoteSearch] = useState('')
   const [selectedNoteId, setSelectedNoteId] = useState(storedContent.notes[0]?.id ?? null)
-  const [showArchivedNotes, setShowArchivedNotes] = useState(false)
   const [searchResults, setSearchResults] = useState([])
+  const [quickCaptureNoteId, setQuickCaptureNoteId] = useState(null)
 
   useEffect(() => {
     const engine = window.mydeskSyncEngine
@@ -849,8 +816,13 @@ function App() {
       return
     }
     const timeout = window.setTimeout(() => {
-      database.saveAll(notes).then(() => setNotesError('')).catch(error => {
+      setNoteSaveState('saving')
+      database.saveAll(notes).then(() => {
+        setNotesError('')
+        setNoteSaveState('saved')
+      }).catch(error => {
         setNotesError(`Notes could not be saved to the local database: ${error.message}`)
+        setNoteSaveState('error')
       })
     }, 350)
     return () => window.clearTimeout(timeout)
@@ -860,13 +832,13 @@ function App() {
     const database = window.mydesk?.notes
     if (!database || !notesReady) return undefined
     let active = true
-    database.search(noteSearch, showArchivedNotes).then(results => {
+    database.search(noteSearch, true).then(results => {
       if (active) setSearchResults(results)
     }).catch(error => {
       if (active) setNotesError(`Notes could not be searched: ${error.message}`)
     })
     return () => { active = false }
-  }, [noteSearch, notes, notesReady, showArchivedNotes])
+  }, [noteSearch, notes, notesReady])
 
   useEffect(() => {
     const database = window.mydesk?.alarms
@@ -955,8 +927,10 @@ function App() {
         createdAt: now,
         updatedAt: now,
       })
+      setNoteSaveState(window.mydesk?.notes ? 'saving' : 'saved')
       setNotes(current => [note, ...current])
       setSelectedNoteId(note.id)
+      setQuickCaptureNoteId(note.id)
       setActiveView('Notes')
     })
   }, [])
@@ -1071,6 +1045,10 @@ function App() {
     }
   }
 
+  function markNotesPendingSave() {
+    setNoteSaveState(window.mydesk?.notes ? 'saving' : 'saved')
+  }
+
   const completedTasks = tasks.filter(task => displayTaskStatus(task) === 'completed').length
   const activeTasks = tasks.length - completedTasks
   const selectedNote = notes.find(note => note.id === selectedNoteId)
@@ -1083,13 +1061,12 @@ function App() {
       .toLowerCase().includes(query)
   }), [taskFilter, taskSearch, tasks])
   const filteredNotes = useMemo(() => {
-    if (window.mydesk?.notes) return searchResults
+    if (window.mydesk?.notes) return noteSearch.trim() ? searchResults : notes
     const query = noteSearch.trim().toLowerCase()
     return notes.filter(note => (
-      (!note.archived || showArchivedNotes)
-      && (!query || `${note.title} ${note.body} ${note.category} ${(note.tags || []).join(' ')}`.toLowerCase().includes(query))
+      !query || `${note.title} ${note.body} ${note.category} ${(note.tags || []).join(' ')}`.toLowerCase().includes(query)
     ))
-  }, [noteSearch, notes, searchResults, showArchivedNotes])
+  }, [noteSearch, notes, searchResults])
 
   function hasDependencyCycle(taskId, dependencies) {
     const tasksById = new Map(tasks.map(task => [task.id, task]))
@@ -1245,20 +1222,45 @@ function App() {
       createdAt: now,
       updatedAt: now,
     })
+    markNotesPendingSave()
     setNotes(current => [note, ...current])
     setSelectedNoteId(note.id)
     setActiveView('Notes')
+    return note.id
   }
 
-  function updateNote(field, value) {
+  function updateNote(field, value, noteId = selectedNoteId) {
+    markNotesPendingSave()
     setNotes(current => current.map(note => (
-      note.id === selectedNoteId
+      note.id === noteId
         ? { ...note, [field]: value, updatedAt: new Date().toISOString() }
         : note
     )))
   }
 
+  function duplicateNote(note) {
+    const now = new Date().toISOString()
+    const duplicate = normalizeNote({
+      ...note,
+      id: createId(),
+      title: `${note.title || 'Untitled note'} (copy)`,
+      createdAt: now,
+      updatedAt: now,
+      pinned: false,
+      archived: false,
+      attachments: [],
+      history: undefined,
+      historyCount: 0,
+      links: (note.links || []).map(link => ({ ...link, id: createId() })),
+    })
+    markNotesPendingSave()
+    setNotes(current => [duplicate, ...current])
+    setSelectedNoteId(duplicate.id)
+    return duplicate.id
+  }
+
   function deleteNote(id) {
+    markNotesPendingSave()
     setNotes(current => current.filter(note => note.id !== id))
     if (selectedNoteId === id) {
       setSelectedNoteId(notes.find(note => note.id !== id)?.id ?? null)
@@ -1272,6 +1274,7 @@ function App() {
     try {
       const attachments = await window.mydesk?.notes?.addAttachments(noteId)
       if (attachments) {
+        markNotesPendingSave()
         setNotes(current => current.map(note => note.id === noteId ? { ...note, attachments } : note))
       }
     } catch (error) {
@@ -1283,6 +1286,7 @@ function App() {
     try {
       const attachments = await window.mydesk?.notes?.removeAttachment(noteId, attachmentId)
       if (attachments) {
+        markNotesPendingSave()
         setNotes(current => current.map(note => note.id === noteId ? { ...note, attachments } : note))
       }
     } catch (error) {
@@ -1684,23 +1688,29 @@ function App() {
           )}
 
           {activeView === 'Notes' && (
-            <NotesPage
+            <NotesView
+              allNotes={notes}
               notes={filteredNotes}
               selectedNote={selectedNote}
+              quickCaptureNoteId={quickCaptureNoteId}
               noteSearch={noteSearch}
-              showArchivedNotes={showArchivedNotes}
               setNoteSearch={setNoteSearch}
-              setShowArchivedNotes={setShowArchivedNotes}
+              onQuickCaptureEditHandled={() => setQuickCaptureNoteId(null)}
               setSelectedNoteId={setSelectedNoteId}
               onCreateNote={createNote}
               onUpdateNote={updateNote}
               onDeleteNote={deleteNote}
+              onDuplicateNote={duplicateNote}
               tasks={tasks}
               events={events}
               onAddAttachments={addNoteAttachments}
               onRemoveAttachment={removeNoteAttachment}
               onOpenAttachment={openNoteAttachment}
               onLoadHistory={loadNoteHistory}
+              formatDate={formatDate}
+              Icon={Icon}
+              saveState={noteSaveState}
+              saveError={notesError}
             />
           )}
 
@@ -3355,154 +3365,6 @@ function CalendarItem({ item, compact, conflicted, onOpenEvent, onToggleTask, on
   )
 }
 
-function NotesPage({
-  notes,
-  selectedNote,
-  noteSearch,
-  showArchivedNotes,
-  setNoteSearch,
-  setShowArchivedNotes,
-  setSelectedNoteId,
-  onCreateNote,
-  onUpdateNote,
-  onDeleteNote,
-  tasks,
-  events,
-  onAddAttachments,
-  onRemoveAttachment,
-  onOpenAttachment,
-  onLoadHistory,
-}) {
-  const [preview, setPreview] = useState(false)
-  const [history, setHistory] = useState([])
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const [linkTarget, setLinkTarget] = useState('')
-
-  async function toggleHistory() {
-    if (!historyOpen && selectedNote) setHistory(await onLoadHistory(selectedNote.id))
-    setHistoryOpen(current => !current)
-  }
-
-  function addLink() {
-    if (!selectedNote || !linkTarget) return
-    const separator = linkTarget.indexOf(':')
-    const type = linkTarget.slice(0, separator)
-    const targetId = linkTarget.slice(separator + 1)
-    const target = type === 'task'
-      ? tasks.find(item => item.id === targetId)
-      : type === 'event'
-        ? events.find(item => item.id === targetId)
-        : { title: targetId }
-    if (!target || selectedNote.links.some(link => link.type === type && link.targetId === targetId)) return
-    onUpdateNote('links', [...selectedNote.links, {
-      id: createId(),
-      type,
-      targetId,
-      label: target.title,
-    }])
-    setLinkTarget('')
-  }
-
-  return (
-    <>
-      <section className="page-title-row notes-title-row">
-        <div><p className="eyebrow">YOUR THOUGHTS, KEPT CLOSE</p><h1>A place for notes<span>.</span></h1><p className="welcome-subtitle">Catch an idea before it wanders off.</p></div>
-        <div className="notes-page-actions">
-          <button type="button" className={`calendar-today ${showArchivedNotes ? 'filter-chip-active' : ''}`} onClick={() => setShowArchivedNotes(current => !current)}>{showArchivedNotes ? 'Hide archived' : 'Show archived'}</button>
-          <button type="button" className="primary-button create-note-button" onClick={onCreateNote}><Icon name="plus" size={17} /> New note</button>
-        </div>
-      </section>
-      <section className="notes-workspace">
-        <aside className="notes-list surface-card">
-          <div className="notes-list-header"><h2>All notes <span>{notes.length}</span></h2></div>
-          <label className="search-field"><Icon name="search" size={17} /><input aria-label="Search notes" placeholder="Search notes..." value={noteSearch} onChange={event => setNoteSearch(event.target.value)} /></label>
-          <div className="notes-list-items">
-            {notes.map(note => (
-              <button type="button" key={note.id} className={`note-list-item ${selectedNote?.id === note.id ? 'note-list-selected' : ''}`} onClick={() => setSelectedNoteId(note.id)}>
-                <strong>{note.pinned ? '★ ' : ''}{note.title || 'Untitled note'}{note.archived ? ' · Archived' : ''}</strong>
-                <span>{note.body || 'No additional text'}</span>
-                <small>{formatDate(note.updatedAt)}</small>
-              </button>
-            ))}
-            {!notes.length && <div className="notes-empty-list">No notes match your search.</div>}
-          </div>
-        </aside>
-        <article className="note-editor surface-card">
-          {selectedNote ? (
-            <>
-              <div className="editor-toolbar">
-                <span><span className="status-dot" /> Autosaved on this device</span>
-                <div className="note-toolbar-actions">
-                  <button type="button" className="calendar-today" onClick={() => onUpdateNote('pinned', !selectedNote.pinned)}>{selectedNote.pinned ? 'Unpin' : 'Pin'}</button>
-                  <button type="button" className="calendar-today" onClick={() => onUpdateNote('archived', !selectedNote.archived)}>{selectedNote.archived ? 'Restore' : 'Archive'}</button>
-                  <button type="button" aria-label="Delete note" className="icon-button delete-note-button" onClick={() => onDeleteNote(selectedNote.id)}><Icon name="trash" size={17} /></button>
-                </div>
-              </div>
-              <input className="note-title-input" aria-label="Note title" value={selectedNote.title} onChange={event => onUpdateNote('title', event.target.value)} placeholder="Untitled note" />
-              <div className="editor-date">Last edited {formatDate(selectedNote.updatedAt)}</div>
-              <div className="note-metadata-row">
-                <label>Category<input aria-label="Note category" maxLength={80} value={selectedNote.category} onChange={event => onUpdateNote('category', event.target.value)} placeholder="Uncategorized" /></label>
-                <label>Daily note<input aria-label="Daily note date" type="date" value={selectedNote.dailyDate} onChange={event => onUpdateNote('dailyDate', event.target.value)} /></label>
-                <label>Tags<input aria-label="Note tags" value={selectedNote.tags.join(', ')} onChange={event => onUpdateNote('tags', [...new Set(event.target.value.split(',').map(tag => tag.trim()).filter(Boolean))])} placeholder="Separate with commas" /></label>
-              </div>
-              <div className="markdown-toolbar">
-                <span>Markdown supported</span>
-                <button type="button" className={`calendar-today ${!preview ? 'filter-chip-active' : ''}`} onClick={() => setPreview(false)}>Write</button>
-                <button type="button" className={`calendar-today ${preview ? 'filter-chip-active' : ''}`} onClick={() => setPreview(true)}>Preview</button>
-              </div>
-              {preview
-                ? <div className="note-markdown-preview">{renderMarkdown(selectedNote.body)}</div>
-                : <textarea className="note-body-input" aria-label="Note content in Markdown" value={selectedNote.body} onChange={event => onUpdateNote('body', event.target.value)} placeholder="Start writing here..." />}
-              <div className="note-related-section">
-                <div className="note-section-heading"><strong>Linked items</strong><span>Tasks, events, or dates</span></div>
-                <div className="note-link-controls">
-                  <select aria-label="Link task or event" value={linkTarget} onChange={event => setLinkTarget(event.target.value)}>
-                    <option value="">Choose a task or event</option>
-                    <optgroup label="Tasks">{tasks.map(task => <option key={task.id} value={`task:${task.id}`}>{task.title}</option>)}</optgroup>
-                    <optgroup label="Events">{events.map(event => <option key={event.id} value={`event:${event.id}`}>{event.title}</option>)}</optgroup>
-                    <optgroup label="Projects">{[...new Set(tasks.map(task => task.project).filter(Boolean))].map(project => <option key={project} value={`project:${project}`}>{project}</option>)}</optgroup>
-                  </select>
-                  <button type="button" className="calendar-today" onClick={addLink} disabled={!linkTarget}>Link</button>
-                </div>
-                <div className="note-link-list">
-                  {selectedNote.dailyDate && <span className="note-link-chip">Date · {formatDate(parseDateKey(selectedNote.dailyDate))}</span>}
-                  {selectedNote.links.map(link => (
-                    <span className="note-link-chip" key={link.id}>{link.type === 'task' ? 'Task' : link.type === 'event' ? 'Event' : 'Project'} · {link.label}<button type="button" aria-label={`Remove link to ${link.label}`} onClick={() => onUpdateNote('links', selectedNote.links.filter(item => item.id !== link.id))}>×</button></span>
-                  ))}
-                  {!selectedNote.links.length && !selectedNote.dailyDate && <span className="note-empty-hint">No linked items yet.</span>}
-                </div>
-              </div>
-              <div className="note-related-section">
-                <div className="note-section-heading"><strong>Attachments</strong><button type="button" className="calendar-today" onClick={() => onAddAttachments(selectedNote.id)}>Add files</button></div>
-                <div className="note-attachment-list">
-                  {selectedNote.attachments.map(file => (
-                    <div className="note-attachment" key={file.id}>
-                      <button type="button" onClick={() => onOpenAttachment(selectedNote.id, file.id)}>{file.name}</button>
-                      <span>{Math.max(1, Math.ceil(file.size / 1024))} KB</span>
-                      <button type="button" aria-label={`Remove ${file.name}`} onClick={() => onRemoveAttachment(selectedNote.id, file.id)}>×</button>
-                    </div>
-                  ))}
-                  {!selectedNote.attachments.length && <span className="note-empty-hint">No attached files.</span>}
-                </div>
-              </div>
-              <div className="note-related-section note-history-section">
-                <button type="button" className="note-history-toggle" onClick={toggleHistory}>{historyOpen ? 'Hide note history' : `Show note history${selectedNote.historyCount ? ` (${selectedNote.historyCount})` : ''}`}</button>
-                {historyOpen && <div className="note-history-list">
-                  {history.map(entry => <article key={entry.id}><strong>{entry.action}</strong><time>{formatDate(entry.createdAt)}</time><p>{entry.title || 'Untitled note'} · {entry.body || 'Empty note'}</p></article>)}
-                  {!history.length && <span className="note-empty-hint">No earlier versions yet.</span>}
-                </div>}
-              </div>
-              <div className="editor-footer">Changes are saved automatically. Use the desktop shortcut Ctrl+Shift+N for quick capture.</div>
-            </>
-          ) : (
-            <div className="empty-state note-empty-state"><span className="empty-state-icon empty-note"><Icon name="note" size={22} /></span><h3>{noteSearch ? 'No notes found' : 'Your page is blank'}</h3><p>{noteSearch ? 'Try another search, or clear the search field.' : 'Create a note to collect your thoughts and ideas.'}</p>{!noteSearch && <button type="button" className="primary-button" onClick={onCreateNote}><Icon name="plus" size={16} /> Create a note</button>}</div>
-          )}
-        </article>
-      </section>
-    </>
-  )
-}
-
 function AlarmsPage({ alarms, profiles, history, onSave, onToggle, onDelete }) {
   const [draft, setDraft] = useState(null)
   const [profileDraft, setProfileDraft] = useState('')
@@ -3558,9 +3420,13 @@ function AlarmsPage({ alarms, profiles, history, onSave, onToggle, onDelete }) {
         </div>
         <aside className="surface-card alarm-history">
           <p className="eyebrow">RECENT ACTIVITY</p><h2>Alarm history</h2>
-          {history.length ? history.map(item => (
-            <div className="alarm-history-item" key={item.id}><strong>{item.label}</strong><span>{item.action}</span><time>{formatDate(item.occurredAt)} · {formatClock(item.occurredAt)}</time></div>
-          )) : <p className="note-empty-hint">Triggered, snoozed, and dismissed alarms will appear here.</p>}
+          {history.length ? (
+            <div className="alarm-history-list">
+              {history.map(item => (
+                <div className="alarm-history-item" key={item.id}><strong>{item.label}</strong><span>{item.action}</span><time>{formatDate(item.occurredAt)} · {formatClock(item.occurredAt)}</time></div>
+              ))}
+            </div>
+          ) : <p className="note-empty-hint">Triggered, snoozed, and dismissed alarms will appear here.</p>}
         </aside>
       </section>
       {draft && (
