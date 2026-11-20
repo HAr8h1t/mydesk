@@ -12,6 +12,8 @@ const { NoteStore } = require('./note-store.cjs')
 const { FocusStore } = require('./focus-store.cjs')
 const { FocusScheduler } = require('./focus-scheduler.cjs')
 const { SettingsStore } = require('./settings-store.cjs')
+const { AlarmToneService } = require('./alarm-tone-service.cjs')
+const { registerAlarmToneIpc } = require('./ipc/alarm-tone-ipc.cjs')
 const { SyncStore } = require('./sync-store.cjs')
 const { AuthService, EncryptedCredentialStore } = require('./auth-service.cjs')
 const { BackupScheduler } = require('./backup-scheduler.cjs')
@@ -27,6 +29,7 @@ let noteStore
 let focusStore
 let focusScheduler
 let settingsStore
+let alarmToneService
 let syncStore
 let authService
 let backupScheduler
@@ -49,6 +52,7 @@ async function openStores() {
   noteStore = new NoteStore(databasePath)
   focusStore = new FocusStore(databasePath)
   settingsStore = new SettingsStore(databasePath)
+  alarmToneService = new AlarmToneService(path.join(app.getPath('userData'), 'alarm-tones'))
   authService = new AuthService({
     syncStore,
     credentialStore: new EncryptedCredentialStore(
@@ -682,11 +686,24 @@ registerIpcHandler('notes:open-attachment', async (_event, noteId, attachmentId)
   if (error) throw new Error(`Unable to open attachment: ${error}`)
 })
 registerIpcHandler('settings:load', () => settingsStore.load())
-registerIpcHandler('settings:save', (_event, key, value) => {
+registerIpcHandler('settings:save', async (_event, key, value) => {
+  const previousTone = key === 'alarm-tone' ? settingsStore.load().alarmTone : null
   const saved = settingsStore.save(key, value)
   if (key === 'calendar-events') reconcileSyncType('calendar-event')
   if (['auto-backup-enabled', 'backup-directory'].includes(key)) backupScheduler.refresh()
+  if (previousTone?.type === 'custom' && value?.type === 'built-in') {
+    alarmToneService.remove(previousTone.id, previousTone.extension).catch(error => {
+      console.error('Unable to remove the replaced alarm ringtone.', error)
+    })
+  }
   return saved
+})
+registerAlarmToneIpc({
+  registerIpcHandler,
+  dialog,
+  BrowserWindow,
+  getSettingsStore: () => settingsStore,
+  getAlarmToneService: () => alarmToneService,
 })
 registerIpcHandler('focus:active', () => focusStore.active())
 registerIpcHandler('focus:scheduled', () => focusStore.scheduled())

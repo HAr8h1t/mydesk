@@ -1,3 +1,5 @@
+import audioContract from '../../shared/audio-contract.json' with { type: 'json' }
+
 const schema = `
   PRAGMA foreign_keys = ON;
   CREATE TABLE IF NOT EXISTS mobile_records (
@@ -61,6 +63,33 @@ const schema = `
     PRIMARY KEY (entity_type, record_id)
   );
 `
+
+const alarmToneIds = new Set(audioContract.alarmTones.map(tone => tone.id))
+const audioMimeTypes = {
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+}
+
+function isMobileAlarmTone(value) {
+  if (!value || typeof value !== 'object') return false
+  if (value.type === 'built-in') {
+    return alarmToneIds.has(value.id)
+      && Object.keys(value).every(key => ['type', 'id'].includes(key))
+  }
+  const expectedMime = audioMimeTypes[value.extension]
+  return value.type === 'custom'
+    && typeof value.name === 'string'
+    && value.name.length > 0
+    && value.name.length <= 120
+    && Boolean(expectedMime)
+    && typeof value.dataUrl === 'string'
+    && value.dataUrl.length <= Math.ceil(audioContract.maxCustomToneBytes * 1.4) + 128
+    && value.dataUrl.startsWith(`data:${expectedMime};base64,`)
+    && /^data:audio\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}$/.test(value.dataUrl)
+    && Object.keys(value).every(key => ['type', 'name', 'extension', 'dataUrl'].includes(key))
+}
 
 const snoozeOptions = new Set([5, 10, 15, 30, 60, 120])
 const weekdays = new Set([0, 1, 2, 3, 4, 5, 6])
@@ -1536,6 +1565,13 @@ function createMobileApi({ database, files, share, notifications, idFactory = cr
           autoBackupEnabled: false,
           backupDirectory: '',
           lastAutoBackupAt: '',
+          soundEffectsEnabled: settings['sound-effects-enabled'] === true,
+          uiSoundVolume: Number.isFinite(settings['ui-sound-volume'])
+            ? Math.min(1, Math.max(0, settings['ui-sound-volume']))
+            : 0.25,
+          alarmTone: isMobileAlarmTone(settings['alarm-tone'])
+            ? settings['alarm-tone']
+            : { type: 'built-in', id: 'alarm-default' },
         }
       },
       save: async (key, value) => {
@@ -1548,6 +1584,15 @@ function createMobileApi({ database, files, share, notifications, idFactory = cr
           await replaceRecords('event', value)
           await setSetting('calendar-events-initialized', true)
           return value
+        }
+        if (key === 'sound-effects-enabled' && typeof value !== 'boolean') {
+          throw new TypeError('Sound effects must be enabled or disabled.')
+        }
+        if (key === 'ui-sound-volume' && (!Number.isFinite(value) || value < 0 || value > 1)) {
+          throw new TypeError('Sound volume must be between 0 and 1.')
+        }
+        if (key === 'alarm-tone' && !isMobileAlarmTone(value)) {
+          throw new TypeError('Choose a supported built-in or personal alarm tone.')
         }
         const settings = await getSetting('settings', {})
         settings[key] = value

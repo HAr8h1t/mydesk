@@ -1,0 +1,23 @@
+{
+  "effects": [
+    "reminder-set",
+    "ui-click",
+    "task-complete",
+    "task-undo",
+    "focus-start",
+    "alarm-default",
+    "alarm-soft"
+  ],
+  "alarmTones": [
+    {
+      "id": "alarm-default",
+      "label": "Gentle rising chime"
+    },
+    {
+      "id": "alarm-soft",
+      "label": "Soft bell"
+    }
+  ],
+  "allowedExtensions": [".mp3", ".wav", ".ogg", ".m4a"],
+  "maxCustomToneBytes": 20971520
+}

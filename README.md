@@ -89,8 +89,9 @@ support and some advanced capabilities remain under development.
                                       using established cryptographic
                                       libraries
 
-  Settings                            Themes, preferences, notifications,
-                                      backup and data export
+  Settings                            Themes, sound effects and personal
+                                      alarm tones, notifications, backups
+                                      and data export
   -----------------------------------------------------------------------
 
 ### Future possibilities
@@ -408,13 +409,6 @@ are stored in SQLite and accessed through the allowlisted Electron preload API.
 Calendar task entries are derived from task dates rather than stored as
 duplicate events. The Daily Timeline combines task, event, reminder, alarm,
 note, focus-session and task-history activity for a selected day.
-
-Smart Schedule is a local, rule-based assistant for the next seven days. It
-detects overlaps between timed events and scheduled tasks, highlights days with
-six or more scheduled hours, shows free windows during a 9–5 planning day, and
-suggests duration- and deadline-aware task scheduling or rescheduling while
-respecting priority and completed dependencies. It does not require AI or a
-cloud service.
 
 The dashboard opens first and summarizes today's tasks, events, reminders,
 task-linked goals, notes, alarms and a scrollable daily timeline. The calendar

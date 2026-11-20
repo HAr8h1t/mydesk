@@ -1,8 +1,35 @@
 const { DatabaseSync } = require('node:sqlite')
 const path = require('node:path')
+const audioContract = require('../shared/audio-contract.json')
 
 const themes = new Set(['warm', 'dark', 'ocean', 'forest'])
-const settingKeys = new Set(['theme', 'calendar-events', 'auto-backup-enabled', 'backup-directory', 'last-auto-backup-at'])
+const alarmToneIds = new Set(audioContract.alarmTones.map(tone => tone.id))
+const settingKeys = new Set([
+  'theme',
+  'calendar-events',
+  'auto-backup-enabled',
+  'backup-directory',
+  'last-auto-backup-at',
+  'sound-effects-enabled',
+  'ui-sound-volume',
+  'alarm-tone',
+])
+
+function isAlarmTone(value) {
+  if (!value || typeof value !== 'object') return false
+  if (value.type === 'built-in') {
+    return alarmToneIds.has(value.id)
+      && Object.keys(value).every(key => ['type', 'id'].includes(key))
+  }
+  return value.type === 'custom'
+    && typeof value.id === 'string'
+    && /^[0-9a-f-]{36}$/i.test(value.id)
+    && typeof value.name === 'string'
+    && value.name.length > 0
+    && value.name.length <= 120
+    && audioContract.allowedExtensions.includes(value.extension)
+    && Object.keys(value).every(key => ['type', 'id', 'name', 'extension'].includes(key))
+}
 
 function isCalendarDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
@@ -31,6 +58,13 @@ class SettingsStore {
       autoBackupEnabled: settings['auto-backup-enabled'] === true,
       backupDirectory: typeof settings['backup-directory'] === 'string' ? settings['backup-directory'] : '',
       lastAutoBackupAt: typeof settings['last-auto-backup-at'] === 'string' ? settings['last-auto-backup-at'] : '',
+      soundEffectsEnabled: settings['sound-effects-enabled'] === true,
+      uiSoundVolume: Number.isFinite(settings['ui-sound-volume'])
+        ? Math.min(1, Math.max(0, settings['ui-sound-volume']))
+        : 0.25,
+      alarmTone: isAlarmTone(settings['alarm-tone'])
+        ? settings['alarm-tone']
+        : { type: 'built-in', id: 'alarm-default' },
     }
   }
 
@@ -58,6 +92,15 @@ class SettingsStore {
     if (key === 'last-auto-backup-at' && (typeof value !== 'string' || (value && !Number.isFinite(Date.parse(value))))) {
       throw new TypeError('The last automatic backup date is invalid.')
     }
+    if (key === 'sound-effects-enabled' && typeof value !== 'boolean') {
+      throw new TypeError('Sound effects must be enabled or disabled.')
+    }
+    if (key === 'ui-sound-volume' && (!Number.isFinite(value) || value < 0 || value > 1)) {
+      throw new TypeError('Sound volume must be between 0 and 1.')
+    }
+    if (key === 'alarm-tone' && !isAlarmTone(value)) {
+      throw new TypeError('Choose a supported built-in or personal alarm tone.')
+    }
     this.database.prepare(`
       INSERT INTO app_settings (key, value) VALUES (?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -70,4 +113,4 @@ class SettingsStore {
   }
 }
 
-module.exports = { SettingsStore, isCalendarDate }
+module.exports = { SettingsStore, isAlarmTone, isCalendarDate }

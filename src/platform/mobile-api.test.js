@@ -47,6 +47,26 @@ test('stores tasks, relationships, and calendar events in local SQLite', async (
   assert.equal((await api.settings.load()).hasCalendarEvents, true)
 })
 
+test('persists and validates sound preferences and a personal ringtone locally', async () => {
+  const api = createMobileApi({ database: createDatabase() })
+  await api.initialize()
+  await api.settings.save('sound-effects-enabled', true)
+  await api.settings.save('ui-sound-volume', 0.6)
+  await api.settings.save('alarm-tone', {
+    type: 'custom',
+    name: 'soft.wav',
+    extension: '.wav',
+    dataUrl: 'data:audio/wav;base64,UklGRg==',
+  })
+
+  const saved = await api.settings.load()
+  assert.equal(saved.soundEffectsEnabled, true)
+  assert.equal(saved.uiSoundVolume, 0.6)
+  assert.equal(saved.alarmTone.name, 'soft.wav')
+  await assert.rejects(api.settings.save('ui-sound-volume', 1.2), /between 0 and 1/)
+  await assert.rejects(api.settings.save('alarm-tone', { type: 'built-in', id: 'unknown' }), /supported built-in/)
+})
+
 test('persists notes, revisions, and deletion without a network service', async () => {
   const api = createMobileApi({ database: createDatabase(), idFactory: () => 'history-uuid' })
   await api.initialize()

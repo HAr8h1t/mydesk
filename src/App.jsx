@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { getScheduleOverview } from './services/scheduling.js'
+import {
+  configureSoundEffects,
+  audioMimeTypes,
+  allowedAudioExtensions,
+  alarmTones,
+  isValidAudioBytes,
+  maxCustomToneBytes,
+  playAlarmTone,
+  playSoundEffect,
+  playTonePreview,
+  stopAlarmTone,
+  stopTonePreview,
+} from './services/sound-effects.js'
 import SyncAccountPanel from './components/SyncAccountPanel.jsx'
 
 const initialTasks = [
@@ -38,7 +50,6 @@ const initialNotes = [
 const navigation = [
   { label: 'Dashboard', icon: 'home' },
   { label: 'Timeline', icon: 'clock' },
-  { label: 'Smart Schedule', icon: 'spark' },
   { label: 'Focus', icon: 'clock' },
   { label: 'Calendar', icon: 'calendar' },
   { label: 'Tasks', icon: 'check' },
@@ -64,6 +75,8 @@ const iconContent = {
   trash: <><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5" /></>,
   spark: <><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z" /><path d="m19 14 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14Z" /></>,
   edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" /></>,
+  sidebarCollapse: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16m9-8h-6m0 0 3-3m-3 3 3 3" /></>,
+  sidebarExpand: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16m3-8h6m0 0-3-3m3 3-3 3" /></>,
 }
 
 function Icon({ name, size = 20 }) {
@@ -130,14 +143,14 @@ function startOfWeek(date) {
 function formatTime(value) {
   if (!value) return ''
   const [hours, minutes] = value.split(':').map(Number)
-  return new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' })
+  return new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit', hourCycle: 'h12' })
     .format(new Date(2000, 0, 1, hours, minutes))
 }
 
 function formatDateTimeCompact(value) {
   const date = new Date(value)
   return Number.isFinite(date.getTime())
-    ? new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date)
+    ? new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hourCycle: 'h12' }).format(date)
     : ''
 }
 
@@ -240,7 +253,7 @@ function localDateKey(value) {
 
 function formatClock(value) {
   return value
-    ? new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(new Date(value))
+    ? new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit', hourCycle: 'h12' }).format(new Date(value))
     : ''
 }
 
@@ -307,33 +320,6 @@ function eventContextReminderAt(event, rule) {
   }
   const minutesBefore = rule === 'one-hour' ? 60 : 15
   return new Date(startsAt.getTime() - minutesBefore * 60_000).toISOString()
-}
-
-function playReminderSound(sound) {
-  if (sound === 'system' || sound === 'silent') return
-  const AudioContext = window.AudioContext || window.webkitAudioContext
-  if (!AudioContext) return
-  try {
-    const context = new AudioContext()
-    const notes = sound === 'chime' ? [784, 988, 1175] : [587, 698]
-    notes.forEach((frequency, index) => {
-      const oscillator = context.createOscillator()
-      const gain = context.createGain()
-      const startAt = context.currentTime + index * 0.16
-      oscillator.type = 'sine'
-      oscillator.frequency.value = frequency
-      gain.gain.setValueAtTime(0.0001, startAt)
-      gain.gain.exponentialRampToValueAtTime(0.12, startAt + 0.025)
-      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.45)
-      oscillator.connect(gain)
-      gain.connect(context.destination)
-      oscillator.start(startAt)
-      oscillator.stop(startAt + 0.46)
-    })
-    window.setTimeout(() => { void context.close() }, 1000)
-  } catch (error) {
-    console.error('Unable to play the selected reminder sound.', error)
-  }
 }
 
 function timelineActivities(date, tasks, events, notes, history, reminders, alarmHistory, focusSessions = []) {
@@ -584,10 +570,16 @@ function App() {
     return [...imported, ...storedContent.reminders]
   })
   const [activeView, setActiveView] = useState('Dashboard')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStorage('mydesk-sidebar-collapsed', false))
   const [timelineInitialDate, setTimelineInitialDate] = useState('')
   const [theme, setTheme] = useState(() => readStorage('mydesk-theme', 'warm'))
   const [settingsReady, setSettingsReady] = useState(() => !window.mydesk?.settings)
   const [settingsError, setSettingsError] = useState('')
+  const [soundEffectsEnabled, setSoundEffectsEnabled] = useState(() => readStorage('mydesk-sound-effects-enabled', false))
+  const [uiSoundVolume, setUiSoundVolume] = useState(() => readStorage('mydesk-ui-sound-volume', 0.25))
+  const [alarmTone, setAlarmTone] = useState(() => readStorage('mydesk-alarm-tone', { type: 'built-in', id: 'alarm-default' }))
+  const [alarmToneNotice, setAlarmToneNotice] = useState('')
+  const activeAlarmId = useRef(null)
   const [autoBackupEnabled, setAutoBackupEnabled] = useState(false)
   const [backupDirectory, setBackupDirectory] = useState('')
   const [backupError, setBackupError] = useState('')
@@ -625,6 +617,24 @@ function App() {
   }, [])
 
   useEffect(() => {
+    configureSoundEffects(soundEffectsEnabled, uiSoundVolume)
+  }, [soundEffectsEnabled, uiSoundVolume])
+
+  useEffect(() => {
+    localStorage.setItem('mydesk-sidebar-collapsed', JSON.stringify(sidebarCollapsed))
+  }, [sidebarCollapsed])
+
+  useEffect(() => {
+    const handleButtonClick = event => {
+      const button = event.target.closest?.('button')
+      if (!button || button.disabled || button.matches('.task-checkbox, .audio-setting-control')) return
+      playSoundEffect('ui-click')
+    }
+    document.addEventListener('click', handleButtonClick, true)
+    return () => document.removeEventListener('click', handleButtonClick, true)
+  }, [])
+
+  useEffect(() => {
     const database = window.mydesk?.settings
     if (!database) return undefined
     let active = true
@@ -633,6 +643,9 @@ function App() {
       setTheme(saved.theme)
       setAutoBackupEnabled(saved.autoBackupEnabled)
       setBackupDirectory(saved.backupDirectory)
+      setSoundEffectsEnabled(saved.soundEffectsEnabled === true)
+      setUiSoundVolume(Number.isFinite(saved.uiSoundVolume) ? saved.uiSoundVolume : 0.25)
+      setAlarmTone(saved.alarmTone || { type: 'built-in', id: 'alarm-default' })
       if (saved.hasCalendarEvents) {
         setEvents(saved.events)
       } else if (storedContent.events.length) {
@@ -875,17 +888,60 @@ function App() {
   useEffect(() => {
     const database = window.mydesk?.alarms
     if (!database?.onTriggered) return undefined
-    const unsubscribeTriggered = database.onTriggered(alarm => {
+    const unsubscribeTriggered = database.onTriggered(async alarm => {
+      activeAlarmId.current = alarm.id
       setActiveAlarm(alarm)
       setAlarms(current => current.map(item => item.id === alarm.id ? alarm : item))
-      playReminderSound(alarm.sound || 'chime')
+      if (alarm.sound === 'silent') {
+        stopAlarmTone()
+        return
+      }
+      let selectedTone = alarmTone
+      if (alarm.sound && alarm.sound !== 'system') {
+        selectedTone = {
+          type: 'built-in',
+          id: alarm.sound === 'chime' ? 'alarm-soft' : 'alarm-default',
+        }
+      }
+      let source = selectedTone.type === 'built-in'
+        ? `/sounds/${selectedTone.id}.wav`
+        : selectedTone.dataUrl
+      if (!source && selectedTone.type === 'custom' && window.mydesk?.settings?.getAlarmToneData) {
+        try {
+          const result = await window.mydesk.settings.getAlarmToneData(selectedTone.id, selectedTone.extension)
+          source = result.dataUrl
+        } catch (error) {
+          setAlarmToneNotice(`Your personal alarm ringtone could not be loaded: ${error.message}`)
+        }
+      }
+      if (activeAlarmId.current !== alarm.id) return
+      if (!source) {
+        setAlarmToneNotice('Your personal alarm ringtone is unavailable. The built-in gentle chime will be used.')
+        source = '/sounds/alarm-default.wav'
+      }
+      playAlarmTone(source, uiSoundVolume, true)
     })
     const unsubscribeError = database.onError?.(message => setAlarmError(message))
     return () => {
       unsubscribeTriggered()
       unsubscribeError?.()
     }
-  }, [])
+  }, [alarmTone, uiSoundVolume])
+
+  useEffect(() => {
+    if (!settingsReady || alarmTone.type !== 'custom' || alarmTone.dataUrl || !window.mydesk?.settings?.getAlarmToneData) return undefined
+    let active = true
+    window.mydesk.settings.getAlarmToneData(alarmTone.id, alarmTone.extension).then(result => {
+      if (active && !result.dataUrl) {
+        setAlarmToneNotice('Your personal alarm ringtone is missing. The built-in gentle chime will be used instead.')
+      } else if (active) {
+        setAlarmToneNotice('')
+      }
+    }).catch(error => {
+      if (active) setAlarmToneNotice(`Your personal alarm ringtone could not be checked: ${error.message}`)
+    })
+    return () => { active = false }
+  }, [alarmTone, settingsReady])
 
   useEffect(() => {
     const database = window.mydesk?.notes
@@ -934,7 +990,7 @@ function App() {
     if (!reminderDatabase?.onTriggered) return undefined
     const unsubscribeTriggered = reminderDatabase.onTriggered(({ reminder }) => {
       setReminders(current => current.map(item => item.id === reminder.id ? reminder : item))
-      playReminderSound(reminder.sound)
+      if (reminder.sound !== 'silent') playSoundEffect('reminder-set')
     })
     const unsubscribeError = reminderDatabase.onError?.(message => setReminderStoreError(message))
     return () => {
@@ -953,6 +1009,12 @@ function App() {
       }
       if (key === 'auto-backup-enabled') setAutoBackupEnabled(value)
       if (key === 'backup-directory') setBackupDirectory(value)
+      if (key === 'sound-effects-enabled') setSoundEffectsEnabled(value)
+      if (key === 'ui-sound-volume') setUiSoundVolume(value)
+      if (key === 'alarm-tone') {
+        setAlarmTone(value)
+        if (value.type === 'built-in') setAlarmToneNotice('')
+      }
       return true
     } catch (error) {
       setSettingsError(`The setting could not be saved: ${error.message}`)
@@ -965,6 +1027,7 @@ function App() {
       const started = await window.mydesk.focus.start(session)
       setActiveFocus(started)
       setFocusError('')
+      playSoundEffect('focus-start')
       return true
     } catch (error) {
       setFocusError(`The focus session could not be started: ${error.message}`)
@@ -1114,9 +1177,10 @@ function App() {
         return
       }
     }
+    const completing = displayTaskStatus(task) !== 'completed'
+    playSoundEffect(completing ? 'task-complete' : 'task-undo')
     setTasks(current => current.flatMap(item => {
       if (item.id !== id) return [item]
-      const completing = displayTaskStatus(item) !== 'completed'
       const updated = {
         ...item,
         status: completing ? 'completed' : 'pending',
@@ -1170,19 +1234,6 @@ function App() {
       ...changes,
       history: action ? addTaskHistory(task, action) : task.history,
     } : task))
-  }
-
-  function scheduleTask(id, date, startTime) {
-    const task = tasks.find(item => item.id === id)
-    if (!task) return
-    const previousDate = task.startDate
-    setTasks(current => current.map(item => item.id === id ? {
-      ...item,
-      startDate: date,
-      startTime,
-      history: addTaskHistory(item, 'Task smart-scheduled', previousDate, date),
-    } : item))
-    setTaskActionError('')
   }
 
   function createNote() {
@@ -1283,7 +1334,11 @@ function App() {
           return { ...alarm, enabled: alarm.repeat === 'once' ? false : alarm.enabled, ringingAt: '', snoozedUntil: '' }
         })()
       if (updated) setAlarms(current => current.map(item => item.id === id ? updated : item))
-      if (action === 'dismiss' || action === 'snooze') setActiveAlarm(null)
+      if (action === 'dismiss' || action === 'snooze') {
+        activeAlarmId.current = null
+        setActiveAlarm(null)
+        stopAlarmTone()
+      }
       setAlarmError('')
       if (database) {
         const latest = await database.load()
@@ -1334,6 +1389,7 @@ function App() {
     setReminders(current => existing
       ? current.map(item => item.id === reminder.id ? reminder : item)
       : [reminder, ...current])
+    playSoundEffect('reminder-set')
     return true
   }
 
@@ -1463,11 +1519,21 @@ function App() {
   ))
 
   return (
-    <div className="app-shell" data-theme={theme}>
+    <div className="app-shell" data-theme={theme} data-sidebar-collapsed={sidebarCollapsed}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><Icon name="spark" size={21} /></div>
-          <span>mydesk<span className="brand-period">.</span></span>
+          <span className="brand-name">mydesk<span className="brand-period">.</span></span>
+          <button
+            type="button"
+            className="sidebar-toggle"
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!sidebarCollapsed}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            onClick={() => setSidebarCollapsed(collapsed => !collapsed)}
+          >
+            <Icon name={sidebarCollapsed ? 'sidebarExpand' : 'sidebarCollapse'} size={18} />
+          </button>
         </div>
         <div className="workspace-label">YOUR WORKSPACE</div>
         <nav className="side-nav" aria-label="Main navigation">
@@ -1475,6 +1541,8 @@ function App() {
             <button
               key={item.label}
               className={`nav-item ${activeView === item.label ? 'nav-item-active' : ''}`}
+              aria-label={item.label}
+              title={sidebarCollapsed ? item.label : undefined}
               onClick={() => setActiveView(item.label)}
               type="button"
             >
@@ -1551,16 +1619,11 @@ function App() {
               onUpdateTask={updateTask}
               onToggleTask={toggleTask}
               onDeleteTask={deleteTask}
-              onOpenAssistant={() => setActiveView('Smart Schedule')}
             />
           )}
 
           {activeView === 'Timeline' && (
             <TimelinePage tasks={tasks} events={events} notes={notes} reminders={reminders} alarmHistory={alarmHistory} focusRevision={focusRevision} initialDate={timelineInitialDate} />
-          )}
-
-          {activeView === 'Smart Schedule' && (
-            <SmartSchedulePage tasks={tasks} events={events} onScheduleTask={scheduleTask} />
           )}
 
           {activeView === 'Focus' && (
@@ -1658,13 +1721,24 @@ function App() {
               onSaveSetting={saveSetting}
               autoBackupEnabled={autoBackupEnabled}
               backupDirectory={backupDirectory}
+              soundEffectsEnabled={soundEffectsEnabled}
+              uiSoundVolume={uiSoundVolume}
+              alarmTone={alarmTone}
+              alarmToneNotice={alarmToneNotice}
+              onChooseAlarmTone={async () => {
+                const result = await window.mydesk?.settings?.chooseAlarmTone?.()
+                if (!result || result.canceled) return false
+                setAlarmTone(result.tone)
+                setAlarmToneNotice('')
+                return true
+              }}
               onSetError={setBackupError}
               message={backupMessage}
               setMessage={setBackupMessage}
             />
           )}
 
-          {!['Dashboard', 'Tasks', 'Timeline', 'Smart Schedule', 'Focus', 'Calendar', 'Reminders', 'Notes', 'Alarms', 'Settings'].includes(activeView) && (
+          {!['Dashboard', 'Tasks', 'Timeline', 'Focus', 'Calendar', 'Reminders', 'Notes', 'Alarms', 'Settings'].includes(activeView) && (
             <ComingSoonPage title={activeView} />
           )}
         </div>
@@ -1887,98 +1961,7 @@ function TaskRow({ task, onToggle, onDelete }) {
   )
 }
 
-function formatScheduleDuration(minutes) {
-  const hours = Math.floor(minutes / 60)
-  const remainder = minutes % 60
-  if (!hours) return `${remainder} min`
-  return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`
-}
-
-function SmartSchedulePage({ tasks, events, onScheduleTask }) {
-  const [now] = useState(() => new Date())
-  const { days, recommendations } = getScheduleOverview(tasks, events, {
-    startDate: dateKey(now),
-    now,
-  })
-  const conflictCount = days.reduce((total, day) => total + day.conflicts.length, 0)
-  const overloadedCount = days.filter(day => day.overloaded).length
-  const unscheduledCount = tasks.filter(task => displayTaskStatus(task) === 'pending' && !task.startDate).length
-
-  return (
-    <>
-      <section className="page-title-row">
-        <div><p className="eyebrow">PLAN WITH CLARITY</p><h1>Smart schedule<span>.</span></h1><p className="welcome-subtitle">A practical look at the next seven days, using your priorities and available time.</p></div>
-      </section>
-
-      <section className="smart-overview-grid" aria-label="Schedule summary">
-        <article className="surface-card smart-overview-stat"><span>Overlaps</span><strong>{conflictCount}</strong><small>activities at the same time</small></article>
-        <article className="surface-card smart-overview-stat"><span>Overloaded days</span><strong>{overloadedCount}</strong><small>six or more scheduled hours</small></article>
-        <article className="surface-card smart-overview-stat"><span>Unscheduled tasks</span><strong>{unscheduledCount}</strong><small>pending tasks without a time</small></article>
-      </section>
-
-      <section className="surface-card smart-week-card">
-        <div className="smart-section-heading"><div><h2>Next seven days</h2><p>Workload counts scheduled tasks and events.</p></div></div>
-        <div className="smart-day-list">
-          {days.map(day => (
-            <article className="smart-day" key={day.date}>
-              <div className="smart-day-heading">
-                <div><strong>{formatDate(parseDateKey(day.date))}</strong><span>{formatScheduleDuration(day.workloadMinutes)} scheduled</span></div>
-                <div className="smart-day-badges">
-                  {day.overloaded && <span className="smart-badge smart-badge-warning">Overloaded</span>}
-                  {day.conflicts.length > 0 && <span className="smart-badge smart-badge-conflict">{day.conflicts.length} {day.conflicts.length === 1 ? 'overlap' : 'overlaps'}</span>}
-                  {!day.overloaded && day.conflicts.length === 0 && <span className="smart-badge">On track</span>}
-                </div>
-              </div>
-              {day.conflicts.length > 0 && (
-                <ul className="smart-conflict-list">
-                  {day.conflicts.map(({ first, second }) => (
-                    <li key={`${first.type}-${first.id}-${second.type}-${second.id}`}>
-                      <strong>{first.title}</strong> overlaps <strong>{second.title}</strong>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="smart-free-slots">
-                <span>Free windows</span>
-                {day.freeSlots.length
-                  ? day.freeSlots.slice(0, 3).map(slot => (
-                    <span className="smart-free-slot" key={`${slot.start}-${slot.end}`}>
-                      {formatTime(minutesToTime(slot.start))}–{formatTime(minutesToTime(slot.end))}
-                    </span>
-                  ))
-                  : <span className="smart-no-free-slot">No 15-minute window during 9–5.</span>}
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="surface-card smart-recommendations">
-        <div className="smart-section-heading"><div><h2>Suggested adjustments</h2><p>Suggestions account for task duration, priority, deadlines and dependencies.</p></div></div>
-        {recommendations.length ? (
-          <div className="smart-recommendation-list">
-            {recommendations.map(item => (
-              <article className="smart-recommendation" key={`${item.task.id}-${item.date}`}>
-                <div className="smart-recommendation-copy">
-                  <strong>{item.task.title}</strong>
-                  <span>{formatDate(parseDateKey(item.date))} · {formatTime(minutesToTime(item.start))}–{formatTime(minutesToTime(item.end))} · {formatScheduleDuration(item.end - item.start)}</span>
-                  <small>{item.reason}</small>
-                </div>
-                <button type="button" className="primary-button" onClick={() => onScheduleTask(item.task.id, item.date, minutesToTime(item.start))}>
-                  {item.reason.startsWith('Reschedule') ? 'Reschedule' : 'Schedule'}
-                </button>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="smart-empty-state">No suitable changes found for the next seven days. Your scheduled tasks may already fit, or deadlines and dependencies may limit available options.</div>
-        )}
-      </section>
-    </>
-  )
-}
-
-function TasksPage({ tasks, allTasks, events, taskFilter, taskSearch, taskActionError, setTaskFilter, setTaskSearch, onSaveTask, onUpdateTask, onToggleTask, onDeleteTask, onOpenAssistant }) {
+function TasksPage({ tasks, allTasks, events, taskFilter, taskSearch, taskActionError, setTaskFilter, setTaskSearch, onSaveTask, onUpdateTask, onToggleTask, onDeleteTask }) {
   const [formOpen, setFormOpen] = useState(false)
   const [editingTask, setEditingTask] = useState(null)
 
@@ -1996,15 +1979,6 @@ function TasksPage({ tasks, allTasks, events, taskFilter, taskSearch, taskAction
       <section className="page-title-row tasks-title-row">
         <div><p className="eyebrow">MAKE IT HAPPEN</p><h1>Your tasks<span>.</span></h1><p className="welcome-subtitle">Small steps make big things feel possible.</p></div>
         <button type="button" className="primary-button" onClick={() => openTaskForm()}><Icon name="plus" size={16} /> New task</button>
-      </section>
-
-      <section className="smart-schedule-card">
-        <span className="smart-schedule-icon"><Icon name="spark" size={18} /></span>
-        <div className="smart-schedule-copy">
-          <strong>Smart scheduling</strong>
-          <span>Check for overlaps, busy days and a better time for pending tasks.</span>
-        </div>
-        <button type="button" className="calendar-today smart-schedule-button" onClick={onOpenAssistant}>Open assistant</button>
       </section>
 
       <section className="surface-card task-list-card task-manager-card">
@@ -2193,7 +2167,7 @@ function TaskEditorModal({ task, allTasks, events, error, onClose, onSave }) {
         <label className="task-form-field task-form-title"><span>Task title</span><input autoFocus required maxLength={180} value={draft.title} onChange={event => update('title', event.target.value)} placeholder="What needs to get done?" /></label>
         <div className="task-form-grid">
           <label className="task-form-field"><span>Start date</span><input type="date" value={draft.startDate} onChange={event => update('startDate', event.target.value)} /></label>
-          <label className="task-form-field"><span>Start time</span><input type="time" value={draft.startTime} onChange={event => update('startTime', event.target.value)} /></label>
+          <label className="task-form-field"><span>Start time (AM/PM)</span><input type="time" lang="en-US" step="60" value={draft.startTime} onChange={event => update('startTime', event.target.value)} /></label>
           <label className="task-form-field"><span>Due date</span><input type="date" value={draft.dueDate} onChange={event => update('dueDate', event.target.value)} /></label>
           <label className="task-form-field"><span>Priority</span><select value={draft.priority} onChange={event => update('priority', event.target.value)}>{taskPriorities.map(priority => <option key={priority}>{priority}</option>)}</select></label>
           <label className="task-form-field"><span>Status</span><select value={draft.status} onChange={event => update('status', event.target.value)}>{taskStatuses.map(status => <option key={status} value={status}>{status[0].toUpperCase() + status.slice(1)}</option>)}</select></label>
@@ -2562,7 +2536,7 @@ function FocusPage({ tasks, activeSession, onStart, onFinish, onRecordManual }) 
         {scheduledError && <p className="task-form-error" role="alert">{scheduledError}</p>}
         {scheduledDraft && (
           <form className="focus-scheduled-form" onSubmit={saveScheduledBlock}>
-            <label className="task-form-field"><span>Start date and time</span><input type="datetime-local" min={localDateTimeValue(new Date(now))} value={scheduledDraft.scheduledAt} onChange={event => setScheduledDraft(current => ({ ...current, scheduledAt: event.target.value }))} required /></label>
+            <label className="task-form-field"><span>Start date and time (AM/PM)</span><input type="datetime-local" lang="en-US" step="60" min={localDateTimeValue(new Date(now))} value={scheduledDraft.scheduledAt} onChange={event => setScheduledDraft(current => ({ ...current, scheduledAt: event.target.value }))} required /></label>
             <label className="task-form-field"><span>Duration</span><select value={scheduledDraft.targetMinutes} onChange={event => setScheduledDraft(current => ({ ...current, targetMinutes: Number(event.target.value) }))}>{[5, 10, 15, 25, 30, 45, 60, 90, 120, 240].map(value => <option value={value} key={value}>{value} minutes</option>)}</select></label>
             <label className="task-form-field"><span>Link a task</span><select value={scheduledDraft.taskId} onChange={event => setScheduledDraft(current => ({ ...current, taskId: event.target.value }))}><option value="">No task</option>{tasks.map(task => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
             <div className="focus-scheduled-form-actions"><button type="button" className="calendar-today" onClick={() => setScheduledDraft(null)}>Cancel</button><button type="submit" className="primary-button">{scheduledDraft.id ? 'Save changes' : 'Save session'}</button></div>
@@ -2578,7 +2552,7 @@ function FocusPage({ tasks, activeSession, onStart, onFinish, onRecordManual }) 
                   <span className="focus-scheduled-icon"><Icon name="clock" size={18} /></span>
                   <div className="focus-scheduled-copy">
                     <strong>{block.taskTitle || 'Focus session'}</strong>
-                    <span>{new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(startsAt)} · {block.targetMinutes} min</span>
+                    <span>{new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hourCycle: 'h12' }).format(startsAt)} · {block.targetMinutes} min</span>
                   </div>
                   <div className="focus-scheduled-actions">
                     <button type="button" className="primary-button" disabled={Boolean(activeSession)} onClick={() => startScheduledBlock(block)}>Start</button>
@@ -2596,8 +2570,8 @@ function FocusPage({ tasks, activeSession, onStart, onFinish, onRecordManual }) 
       <section className="focus-manual-card surface-card">
         <div className="section-heading"><div><p className="eyebrow">FILL IN THE GAPS</p><h2>Record time manually</h2></div></div>
         <form className="focus-manual-form" onSubmit={submitManual}>
-          <label className="task-form-field"><span>Started</span><input type="datetime-local" value={manualStart} onChange={event => setManualStart(event.target.value)} required /></label>
-          <label className="task-form-field"><span>Ended</span><input type="datetime-local" value={manualEnd} onChange={event => setManualEnd(event.target.value)} required /></label>
+          <label className="task-form-field"><span>Started (AM/PM)</span><input type="datetime-local" lang="en-US" step="60" value={manualStart} onChange={event => setManualStart(event.target.value)} required /></label>
+          <label className="task-form-field"><span>Ended (AM/PM)</span><input type="datetime-local" lang="en-US" step="60" value={manualEnd} onChange={event => setManualEnd(event.target.value)} required /></label>
           <label className="task-form-field"><span>Task</span><select value={manualTaskId} onChange={event => setManualTaskId(event.target.value)}><option value="">No task</option>{tasks.map(task => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
           <label className="task-form-field"><span>Category</span><input maxLength="180" value={manualCategory} onChange={event => setManualCategory(event.target.value)} /></label>
           <button type="submit" className="primary-button" disabled={manualSaving}>{manualSaving ? 'Saving…' : 'Save time'}</button>
@@ -2612,7 +2586,7 @@ function FocusPage({ tasks, activeSession, onStart, onFinish, onRecordManual }) 
           <div className="focus-history-list">{history.slice(0, 30).map(session => (
             <article key={session.id} className="focus-history-row">
               <span className="focus-history-dot" />
-              <div><strong>{session.taskTitle || (session.mode === 'break' ? 'Break' : 'Focus session')}</strong><span>{new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(session.startedAt))} · {session.category}</span></div>
+              <div><strong>{session.taskTitle || (session.mode === 'break' ? 'Break' : 'Focus session')}</strong><span>{new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hourCycle: 'h12' }).format(new Date(session.startedAt))} · {session.category}</span></div>
               <b>{session.status === 'completed' ? formatDuration(session.durationSeconds) : session.status}</b>
             </article>
           ))}</div>
@@ -2622,9 +2596,26 @@ function FocusPage({ tasks, activeSession, onStart, onFinish, onRecordManual }) 
   )
 }
 
-function SettingsPage({ theme, onSaveSetting, autoBackupEnabled, backupDirectory, onSetError, message, setMessage }) {
+function SettingsPage({
+  theme,
+  onSaveSetting,
+  autoBackupEnabled,
+  backupDirectory,
+  soundEffectsEnabled,
+  uiSoundVolume,
+  alarmTone,
+  alarmToneNotice,
+  onChooseAlarmTone,
+  onSetError,
+  message,
+  setMessage,
+}) {
   const [busy, setBusy] = useState(false)
   const [exporting, setExporting] = useState('')
+  const [tonePreviewing, setTonePreviewing] = useState(false)
+  const [toneError, setToneError] = useState('')
+  const ringtoneInput = useRef(null)
+  useEffect(() => () => stopTonePreview(), [])
   const themes = [
     { id: 'warm', label: 'Warm', description: 'Soft, familiar neutrals' },
     { id: 'dark', label: 'Dark', description: 'A quieter low-light palette' },
@@ -2691,6 +2682,81 @@ function SettingsPage({ theme, onSaveSetting, autoBackupEnabled, backupDirectory
     }
   }
 
+  async function choosePersonalTone() {
+    setToneError('')
+    onSetError('')
+    try {
+      if (window.mydesk?.settings?.chooseAlarmTone) {
+        await onChooseAlarmTone()
+        return
+      }
+      ringtoneInput.current?.click()
+    } catch (error) {
+      setToneError(`The ringtone could not be selected: ${error.message}`)
+    }
+  }
+
+  async function loadPersonalTone(file) {
+    const extension = `.${file.name.split('.').pop().toLowerCase()}`
+    if (!allowedAudioExtensions.includes(extension)) {
+      setToneError('Choose an MP3, WAV, OGG, or M4A audio file.')
+      return
+    }
+    if (!file.size || file.size > maxCustomToneBytes) {
+      setToneError('The alarm ringtone must be smaller than 20 MB.')
+      return
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      if (!isValidAudioBytes(extension, bytes)) {
+        setToneError('The selected file is not a valid supported audio file.')
+        return
+      }
+      const fileDataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          if (typeof reader.result !== 'string') reject(new Error('The selected ringtone could not be read.'))
+          else resolve(reader.result)
+        }
+        reader.onerror = () => reject(new Error('The selected ringtone could not be read.'))
+        reader.readAsDataURL(file)
+      })
+      const dataUrl = fileDataUrl.replace(/^data:[^;,]*;base64,/, `data:${audioMimeTypes[extension]};base64,`)
+      const saved = await onSaveSetting('alarm-tone', {
+        type: 'custom',
+        name: file.name.slice(0, 120),
+        extension,
+        dataUrl,
+      })
+      if (saved) setToneError('')
+    } catch (error) {
+      setToneError(`The ringtone could not be saved: ${error.message}`)
+    }
+  }
+
+  async function previewAlarmTone() {
+    if (tonePreviewing) {
+      stopTonePreview()
+      setTonePreviewing(false)
+      return
+    }
+    setToneError('')
+    try {
+      let source = alarmTone.type === 'built-in' ? `/sounds/${alarmTone.id}.wav` : alarmTone.dataUrl
+      if (!source && window.mydesk?.settings?.getAlarmToneData) {
+        source = (await window.mydesk.settings.getAlarmToneData(alarmTone.id, alarmTone.extension)).dataUrl
+      }
+      if (!source) {
+        setToneError('Your personal alarm ringtone is missing. Choose it again or select a built-in tone.')
+        return
+      }
+      setTonePreviewing(true)
+      playTonePreview(source, uiSoundVolume, () => setTonePreviewing(false))
+    } catch (error) {
+      setToneError(`The ringtone preview could not be loaded: ${error.message}`)
+    }
+  }
+
   return (
     <>
       <section className="page-title-row"><div><p className="eyebrow">MAKE MYDESK YOURS</p><h1>Settings<span>.</span></h1><p className="welcome-subtitle">Choose a color palette and keep your local data safe and portable.</p></div></section>
@@ -2704,6 +2770,52 @@ function SettingsPage({ theme, onSaveSetting, autoBackupEnabled, backupDirectory
             </button>
           ))}
         </div>
+      </section>
+
+      <section className="settings-card surface-card">
+        <div className="section-heading"><div><p className="eyebrow">SOUNDS &amp; ALARMS</p><h2>Audio preferences</h2></div></div>
+        <label className="backup-toggle sound-preference-toggle">
+          <input type="checkbox" checked={soundEffectsEnabled} onChange={event => onSaveSetting('sound-effects-enabled', event.target.checked)} />
+          <span>Enable subtle interface sounds</span>
+        </label>
+        <p className="settings-description">Gentle sounds play when setting reminders, completing tasks, starting focus sessions, and interacting with buttons.</p>
+        <label className="sound-volume-control">
+          <span>Sound volume <strong>{Math.round(uiSoundVolume * 100)}%</strong></span>
+          <input type="range" min="0" max="1" step="0.05" value={uiSoundVolume} onChange={event => onSaveSetting('ui-sound-volume', Number(event.target.value))} />
+        </label>
+        <div className="sound-tone-row">
+          <label className="sync-field-group" htmlFor="alarm-tone-choice">Default alarm tone
+            <select
+              id="alarm-tone-choice"
+              className="sync-field"
+              value={alarmTone.type === 'built-in' ? alarmTone.id : 'custom'}
+              onChange={event => {
+                if (event.target.value === 'custom') choosePersonalTone()
+                else onSaveSetting('alarm-tone', { type: 'built-in', id: event.target.value })
+              }}
+            >
+              {alarmTones.map(tone => <option value={tone.id} key={tone.id}>{tone.label}</option>)}
+              <option value="custom">{alarmTone.type === 'custom' ? `Personal: ${alarmTone.name}` : 'Personal ringtone…'}</option>
+            </select>
+          </label>
+          <div className="sound-tone-actions">
+            <button type="button" className="calendar-today audio-setting-control" onClick={choosePersonalTone}>Choose personal tone…</button>
+            <button type="button" className="calendar-today audio-setting-control" onClick={previewAlarmTone}>{tonePreviewing ? 'Stop preview' : 'Preview tone'}</button>
+          </div>
+          <input
+            ref={ringtoneInput}
+            className="sound-file-input"
+            type="file"
+            accept=".mp3,.wav,.ogg,.m4a,audio/*"
+            onChange={event => {
+              const file = event.target.files?.[0]
+              if (file) loadPersonalTone(file)
+              event.target.value = ''
+            }}
+          />
+        </div>
+        {alarmToneNotice && <p className="sound-tone-notice" role="status">{alarmToneNotice}</p>}
+        {toneError && <p className="sound-tone-error" role="alert">{toneError}</p>}
       </section>
 
       <SyncAccountPanel />
@@ -3137,8 +3249,8 @@ function CalendarPage({ events, tasks, reminders, onSaveEvent, onDeleteEvent, on
             </label>
             <div className="event-form-fields">
               <label className="event-field"><span>Date</span><input type="date" required value={eventDraft.date || ''} onChange={event => setEventDraft(current => ({ ...current, date: event.target.value }))} /></label>
-              <label className="event-field"><span>Starts</span><input type="time" required value={eventDraft.startTime || ''} onChange={event => setEventDraft(current => ({ ...current, startTime: event.target.value }))} /></label>
-              <label className="event-field"><span>Ends</span><input type="time" required value={eventDraft.endTime || ''} onChange={event => setEventDraft(current => ({ ...current, endTime: event.target.value }))} /></label>
+              <label className="event-field"><span>Starts (AM/PM)</span><input type="time" lang="en-US" step="60" required value={eventDraft.startTime || ''} onChange={event => setEventDraft(current => ({ ...current, startTime: event.target.value }))} /></label>
+              <label className="event-field"><span>Ends (AM/PM)</span><input type="time" lang="en-US" step="60" required value={eventDraft.endTime || ''} onChange={event => setEventDraft(current => ({ ...current, endTime: event.target.value }))} /></label>
               <label className="event-field"><span>Category</span><select value={eventDraft.category || 'Personal'} onChange={event => setEventDraft(current => ({ ...current, category: event.target.value }))}>{eventCategories.map(category => <option key={category.name}>{category.name}</option>)}</select></label>
               <label className="event-field"><span>Repeat</span><select value={eventDraft.repeat || 'none'} onChange={event => setEventDraft(current => ({ ...current, repeat: event.target.value }))}><option value="none">Does not repeat</option><option value="daily">Every day</option><option value="weekly">Every week</option><option value="monthly">Every month</option></select></label>
             </div>
@@ -3406,7 +3518,7 @@ function AlarmsPage({ alarms, profiles, history, onSave, onToggle, onDelete }) {
       repeat: 'once',
       days: [1, 2, 3, 4, 5],
       profile: profiles[0] || 'General',
-      sound: 'chime',
+      sound: 'system',
       enabled: true,
     })
   }
@@ -3456,8 +3568,8 @@ function AlarmsPage({ alarms, profiles, history, onSave, onToggle, onDelete }) {
           <form className="task-editor-modal alarm-editor-modal" onSubmit={saveDraft}>
             <div className="task-editor-heading"><div><p className="eyebrow">ALARM DETAILS</p><h2>{draft.id ? 'Edit alarm' : 'Create an alarm'}</h2></div><button type="button" className="icon-button" aria-label="Close alarm form" onClick={() => setDraft(null)}>×</button></div>
             <div className="task-form-grid">
-              <label className="task-form-field task-form-title"><span>Label</span><input autoFocus required maxLength={120} value={draft.label} onChange={event => setField('label', event.target.value)} placeholder="Morning alarm" /></label>
-              <label className="task-form-field"><span>Time</span><input required type="time" value={draft.time} onChange={event => setField('time', event.target.value)} /></label>
+              <label className="task-form-field task-form-title"><span>Label</span><input autoFocus required maxLength={120} value={draft.label} onChange={event => setField('label', event.target.value)} placeholder="Daily alarm" /></label>
+              <label className="task-form-field"><span>Time (AM/PM)</span><input required type="time" lang="en-US" step="60" value={draft.time} onChange={event => setField('time', event.target.value)} /></label>
               <label className="task-form-field"><span>Repeat</span><select value={draft.repeat} onChange={event => setField('repeat', event.target.value)}><option value="once">One time</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="custom">Custom days</option></select></label>
               {draft.repeat === 'once' && <label className="task-form-field"><span>Date</span><input required type="date" value={draft.onceDate} onChange={event => setField('onceDate', event.target.value)} /></label>}
               {['weekly', 'custom'].includes(draft.repeat) && <fieldset className="alarm-days-field"><legend>Repeat on</legend>{weekdays.map((day, index) => <label key={day}><input type="checkbox" checked={draft.days.includes(index)} onChange={event => setField('days', event.target.checked ? [...draft.days, index].sort() : draft.days.filter(item => item !== index))} />{day}</label>)}</fieldset>}
@@ -3707,7 +3819,7 @@ function ReminderEditor({ reminder, tasks, events, onClose, onSave }) {
         </div>
         <div className="task-form-grid">
           <label className="task-form-field task-form-title"><span>Reminder title</span><input autoFocus required maxLength={180} value={draft.title} onChange={event => update('title', event.target.value)} placeholder="What should you remember?" /></label>
-          <label className="task-form-field"><span>Date and time</span><input required type="datetime-local" value={draft.scheduledAt} onChange={event => update('scheduledAt', event.target.value)} /></label>
+          <label className="task-form-field"><span>Date and time (AM/PM)</span><input required type="datetime-local" lang="en-US" step="60" value={draft.scheduledAt} onChange={event => update('scheduledAt', event.target.value)} /></label>
           <label className="task-form-field"><span>Link to task or event</span><select value={sourceValue} onChange={event => {
             const [sourceType = 'none', sourceId = ''] = (event.target.value || 'none:').split(':')
             const source = sourceType === 'task' ? tasks.find(item => item.id === sourceId) : events.find(item => item.id === sourceId)

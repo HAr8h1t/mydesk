@@ -98,6 +98,8 @@ contextBridge.exposeInMainWorld('mydesk', {
   settings: {
     load: () => ipcRenderer.invoke('settings:load'),
     save: (key, value) => ipcRenderer.invoke('settings:save', key, value),
+    chooseAlarmTone: () => ipcRenderer.invoke('settings:choose-alarm-tone'),
+    getAlarmToneData: (id, extension) => ipcRenderer.invoke('settings:get-alarm-tone-data', id, extension),
   },
   sync: {
     state: () => ipcRenderer.invoke('sync:state'),
